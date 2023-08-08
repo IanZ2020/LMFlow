@@ -135,7 +135,6 @@ class HFDecoderModel(DecoderModel, Tunable):
             "revision": model_args.model_revision,
             "use_auth_token": True if model_args.use_auth_token else None,
         }
-        
         try:
             if model_args.tokenizer_name:
                 tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
@@ -168,8 +167,9 @@ class HFDecoderModel(DecoderModel, Tunable):
                     " script, save it, and load it from here, using"
                     " --tokenizer_name."
                 )
-            
-        self.tokenizer = tokenizer  
+        
+        tokenizer.name_or_path=''
+        self.tokenizer = tokenizer
 
         torch_dtype = (
             model_args.torch_dtype
