@@ -152,6 +152,9 @@ class Evaluator(BasePipeline):
         elif metric in ["layer_importance"]:
             cat_sim_results, mean_sim_results = self._evaluate_layer_importance(model, dataset, verbose=verbose)
             return cat_sim_results, mean_sim_results
+        elif metric in ["layer_attention_importance"]:
+            result = self._evaluate_layer_attn_importance(model, dataset, verbose=verbose)
+            return result
         else:
             raise NotImplementedError(f"metric {metric} is not supported")
 
@@ -423,6 +426,57 @@ class Evaluator(BasePipeline):
         print("Mean_Sim for All Layers", mean_sim_results.mean(dim=-1),"Mean_Sim_Rank: ",mean_sim_results.mean(dim=-1).argsort(dim=-1))
         return cat_sim_results, mean_sim_results
 
+    def _evaluate_layer_attn_importance(self, model, dataset: Dataset, verbose=True):
+        data_dict = dataset.to_dict()
+        if data_dict['type'] == 'text2text':
+            raise NotImplementedError("ppl evaluation is currently not supported for text2text dataset, please use text_only dataset.")
+        texts = [ instance["text"] for instance in data_dict["instances"] ]
+        encodings = model.get_tokenizer()("\n\n".join(texts), return_tensors="pt")
+        # Define some constant
+        try:
+            max_length = min(model.get_backend_model().config.n_positions, model.get_max_length())
+        except:
+            max_length = min(1024, model.get_max_length())
+
+        if verbose:
+            print(f"The maximum sequence length : {max_length}")
+        seq_len = encodings.input_ids.size(1)
+
+        def attn_eval(attn_out):
+            self_attn = []
+            for i in range(len(model.get_backend_model().base_model.layers)):
+                attn_matrix = attn_out[i]
+                seq_length = attn_matrix.shape[2]
+                num_of_heads = attn_matrix.shape[1]
+                
+                self_attn.append(torch.stack([attn_matrix[0][i].trace()/seq_length for i in range(num_of_heads)]))
+            return  torch.stack(self_attn)
+
+
+        attn_results = []
+        prev_end_loc = 0
+        for begin_loc in range(0, seq_len, self.block_size):
+            end_loc = min(begin_loc + max_length, seq_len)
+            trg_len = end_loc - prev_end_loc  # may be different from block_size on last loop
+            input_ids = encodings.input_ids[:, begin_loc:end_loc].to(device=self.local_rank)
+            target_ids = input_ids.clone()
+            target_ids[:, :-trg_len] = -100
+
+            with torch.no_grad():
+                outputs = model.get_backend_model().base_model.forward(input_ids,output_attentions=True)
+                # loss is calculated using CrossEntropyLoss which averages over valid labels
+                # N.B. the model only calculates loss over trg_len - 1 labels, because it internally shifts the labels
+                # to the left by 1.
+                attn_out = outputs.attentions
+
+            attn_results.append(attn_eval(attn_out))
+            prev_end_loc = end_loc
+            if end_loc == seq_len:
+                break
+        attn_result = torch.stack(attn_results).mean(dim=0)
+        print(attn_result)
+        return attn_result
+        
 
     def _evaluate_nll(
         self,
