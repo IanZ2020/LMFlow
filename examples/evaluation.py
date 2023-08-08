@@ -18,7 +18,7 @@ import os
 import sys
 sys.path.remove(os.path.abspath(os.path.dirname(sys.argv[0])))
 from transformers import HfArgumentParser
-
+import torch
 from lmflow.datasets.dataset import Dataset
 from lmflow.pipeline.auto_pipeline import AutoPipeline
 from lmflow.models.auto_model import AutoModel
@@ -48,4 +48,6 @@ evaluator = AutoPipeline.get_pipeline(
     data_args=data_args,
     pipeline_args=pipeline_args,
 )
-evaluator.evaluate(model=model, dataset=dataset, metric=pipeline_args.metric)
+result = evaluator.evaluate(model=model, dataset=dataset, metric=pipeline_args.metric)
+
+torch.save(result,'/home/zhangyihan/projects/LMFlow/attn_result.pt')
