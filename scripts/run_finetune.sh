@@ -13,7 +13,6 @@ project_dir=$(cd "$(dirname $0)"/..; pwd)
 output_dir=${project_dir}/output_models/${exp_id}
 log_dir=${project_dir}/log/${exp_id}
 
-
 mkdir -p ${output_dir} ${log_dir}
 
 deepspeed ${deepspeed_args} \
@@ -26,7 +25,7 @@ deepspeed ${deepspeed_args} \
     --block_size 1024 \
     --per_device_train_batch_size 16 \
     --deepspeed configs/ds_config_zero3.json \
-    --bf16 \
+    --fp16 \
     --run_name ${exp_id} \
     --validation_split_percentage 0 \
     --logging_steps 1 \

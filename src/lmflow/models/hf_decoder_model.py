@@ -59,7 +59,24 @@ logger = logging.getLogger(__name__)
 MODELS_SUPPORT_FLASH_ATTENTION = [
     "LlamaForCausalLM",
     "GPTNeoForCausalLM",
+    "GPT2ForCausalLM",
+    "BloomForCausalLM"
 ]
+
+GPU_SUPPORT_FLASH_ATTENTION = {
+    "A100": ["LlamaForCausalLM", "GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"],
+    "A40": ["GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"]
+}
+
+try:
+    import flash_attn
+    if int(flash_attn.__version__.split(".")[0]) == 2:
+        GPU_SUPPORT_FLASH_ATTENTION = {
+            "A100": ["LlamaForCausalLM", "GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"],
+            "A40": ["LlamaForCausalLM","GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"]
+        }
+except:
+    pass
 
 class HFDecoderModel(DecoderModel, Tunable):
     r"""
@@ -118,19 +135,41 @@ class HFDecoderModel(DecoderModel, Tunable):
             "revision": model_args.model_revision,
             "use_auth_token": True if model_args.use_auth_token else None,
         }
-        if model_args.tokenizer_name:
-            tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
-        elif model_args.model_name_or_path:
-            tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
-        else:
-            raise ValueError(
-                "You are instantiating a new tokenizer from scratch. This is"
-                " not supported by this script. You can do it from another"
-                " script, save it, and load it from here, using"
-                " --tokenizer_name."
-            )
+        try:
+            if model_args.tokenizer_name:
+                tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
+            elif model_args.model_name_or_path:
+                tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
+            else:
+                raise ValueError(
+                    "You are instantiating a new tokenizer from scratch. This is"
+                    " not supported by this script. You can do it from another"
+                    " script, save it, and load it from here, using"
+                    " --tokenizer_name."
+                )
+
+        except RecursionError:
+            logger.warning("The tokenizer_config.json file doesn't set the special tokens. Using default values: <unk>, <s>, </s> for unknown token, bos token and eos token respectively.")
+            if model_args.tokenizer_name:
+                tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, unk_token="<unk>",
+                                                    bos_token="<s>",
+                                                    eos_token="</s>",
+                                                    **tokenizer_kwargs)
+            elif model_args.model_name_or_path:
+                tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, unk_token="<unk>",
+                                                    bos_token="<s>",
+                                                    eos_token="</s>",
+                                                    **tokenizer_kwargs)
+            else:
+                raise ValueError(
+                    "You are instantiating a new tokenizer from scratch. This is"
+                    " not supported by this script. You can do it from another"
+                    " script, save it, and load it from here, using"
+                    " --tokenizer_name."
+                )
+        
         tokenizer.name_or_path=''
-        self.tokenizer = tokenizer 
+        self.tokenizer = tokenizer
 
         torch_dtype = (
             model_args.torch_dtype
@@ -155,7 +194,19 @@ class HFDecoderModel(DecoderModel, Tunable):
                 config.update_from_string(model_args.config_overrides)
                 logger.info(f"New config: {config}")
 
+        #position interpolation
+        if model_args.do_rope_scaling:
+            if "LlamaForCausalLM" in config.architectures:
+                from lmflow.utils.position_interpolation.llama_rope_scaled_monkey_patch import (
+                        replace_llama_with_condense,
+                )
+                replace_llama_with_condense(model_args.rope_pi_ratio, model_args.rope_ntk_ratio)
+                
         # Whether use flash attention
+        supported_gpu_device = None
+        for gpu in GPU_SUPPORT_FLASH_ATTENTION:
+            if gpu in torch.cuda.get_device_name():
+                supported_gpu_device = gpu
         if model_args.use_flash_attention:
             if not any(model_supported in config.architectures
                        for model_supported in MODELS_SUPPORT_FLASH_ATTENTION):
@@ -163,27 +214,40 @@ class HFDecoderModel(DecoderModel, Tunable):
                     f"Model \"{config.architectures}\" does not support"
                     " flash attention, use normal attention layer instead"
                 )
-            elif "A100" not in torch.cuda.get_device_name():
+            elif supported_gpu_device is None:
                 logger.warning(
                     f"Your decice \"{torch.cuda.get_device_name()}\""
                     " does not support flash attention, it will"
                     " automatically use normal attention layer"
                 )
             else:
+                
+                supported_models = GPU_SUPPORT_FLASH_ATTENTION[supported_gpu_device]
+                
                 config.use_cache = False
-                if "LlamaForCausalLM" in config.architectures:
+                if "LlamaForCausalLM" in config.architectures and "LlamaForCausalLM" in supported_models:
                     from lmflow.utils.flash_attention.llama_flash_attention import (
                         replace_llama_attn_with_flash_attn,
                     )
                     replace_llama_attn_with_flash_attn()
-                elif "GPTNeoForCausalLM" in config.architectures:
+                elif "GPTNeoForCausalLM" in config.architectures and "GPTNeoForCausalLM" in supported_models:
                     from lmflow.utils.flash_attention.gpt_neo_flash_attention import (
                         replace_gpt_neo_attn_with_flash_attn,
                     )
                     replace_gpt_neo_attn_with_flash_attn()
+                elif "GPT2ForCausalLM" in config.architectures and "GPT2ForCausalLM" in supported_models:
+                    from lmflow.utils.flash_attention.gpt2_flash_attention import (
+                        replace_gpt2_attn_with_flash_attn,
+                    )
+                    replace_gpt2_attn_with_flash_attn()
+                elif "BloomForCausalLM" in config.architectures and "BloomForCausalLM" in supported_models:
+                    from lmflow.utils.flash_attention.bloom_flash_attention import (
+                        replace_bloom_attn_with_flash_attn
+                    )
+                    replace_bloom_attn_with_flash_attn()
                 else:
                     raise ValueError(
-                        f"Model \"{config.architectures}\" does not support"
+                        f"Model \"{config.architectures}\" with GPU {supported_gpu_device} does not support"
                         " flash attention, use normal attention layer instead"
                     )
                     
@@ -222,7 +286,9 @@ class HFDecoderModel(DecoderModel, Tunable):
             # We resize the embeddings only when necessary to avoid index errors.
             # If you are creating a model from scratch on a small vocab and want a
             # smaller embedding size, remove this test.
-            embedding_size = model.get_input_embeddings().weight.shape[0]
+            with deepspeed.zero.GatheredParameters(model.get_input_embeddings().weight, modifier_rank=None):
+                weights = model.get_input_embeddings().weight
+                embedding_size = weights.shape[0]
             if len(tokenizer) > embedding_size:
                 model.resize_token_embeddings(len(tokenizer))
 
@@ -252,7 +318,7 @@ class HFDecoderModel(DecoderModel, Tunable):
                 dschf = HfDeepSpeedConfig(ds_config)
                 peft_model_id = model_args.lora_model_path
                 # NOTE: Currently offload is not supported by llama
-                if "llama" in model_args.model_name_or_path and model_args.use_ram_optimized_load:
+                if config.model_type == "llama" and model_args.use_ram_optimized_load:
                     logger.warning(
                         "llama does not support RAM optimized load. Automatically"
                         " use original load instead."

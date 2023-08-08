@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # coding=utf-8
 """This is a class called HFDecoderModel which is a wrapper around transformers model and
-tokenizer classes. It has several methods such as __init__, tokenize, and train that are 
+tokenizer classes. It has several methods such as __init__, tokenize, and train that are
 used for training and fine-tuning the model. The __init__ method takes in several arguments
-such as model_args, tune_strategy, and ds_config, which are used to load the pretrained 
+such as model_args, tune_strategy, and ds_config, which are used to load the pretrained
 model and tokenizer, and initialize the training settings.
 
 The tokenize method is used to tokenize the input text and return the input IDs and attention
@@ -18,7 +18,9 @@ models and can be used for various NLP tasks such as language modeling, text cla
 and question answering.
 """
 
+import copy
 import logging
+import time
 from typing import List, Union
 
 import deepspeed
@@ -42,13 +44,21 @@ from transformers import (
     AutoConfig,
     AutoTokenizer,
     AutoModelForSeq2SeqLM,
+    AutoModelForVision2Seq,
     AutoModel,
+    AutoProcessor,
+    LlamaTokenizer
 )
+
+from transformers import (Blip2VisionConfig,
+                          Blip2QFormerConfig,
+                          Blip2Config,
+                          LlamaConfig)
 
 from lmflow.datasets.dataset import Dataset
 from lmflow.models.encoder_decoder_model import EncoderDecoderModel
 from lmflow.models.interfaces.tunable import Tunable
-
+from lmflow.models.vision2seq_model import CustomAutoVision2SeqModel
 
 logger = logging.getLogger(__name__)
 
@@ -60,20 +70,20 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
     Parameters
     ------------
 
-    model_args : 
+    model_args :
         Model arguments such as model name, path, revision, etc.
 
     tune_strategy : str or none,  default="normal".
         A string representing the dataset backend. Defaults to "huggingface".
-    
-    ds_config :   
+
+    ds_config :
         Deepspeed configuations.
-    
+
     args : Optional.
         Positional arguments.
-    
+
     kwargs : Optional.
-        Keyword arguments.    
+        Keyword arguments.
     """
 
     def __init__(
@@ -83,6 +93,7 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
         ds_config=None,
         device="gpu",
         use_accelerator=False,
+        custom_model=False,
         *args,
         **kwargs
     ):
@@ -107,7 +118,7 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
         if tune_strategy == 'normal':
             raise NotImplementedError(
                 f"tune_strategy \"{tune_strategy}\" is not supported"
-            )    
+            )
         elif tune_strategy == 'none':
             if use_accelerator:
                 raise NotImplementedError(
@@ -123,45 +134,81 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
                 )
                 model_args.use_ram_optimized_load = False
 
-
-            if model_args.model_name_or_path == 'THUDM/chatglm-6b':
-                self.backend_model = AutoModel.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
-
-            elif model_args.use_ram_optimized_load and peft_model_id is None:
-                try:
-                    # RAM-optimized load
-                    self.backend_model = AutoModelForSeq2SeqLM.from_pretrained(
-                        model_args.model_name_or_path,
-                        device_map="auto",
-                        offload_folder="offload",
-                        offload_state_dict=True,
-                    )
-                except:
-                    logger.warning(
-                        "Failed to use RAM optimized load. Automatically"
-                        " use original load instead."
-                    )
-                    # Normal load
-                    self.backend_model = AutoModelForSeq2SeqLM.from_pretrained(
-                        model_args.model_name_or_path,
-                    )
+            # get model register
+            self.arch_type = model_args.arch_type
+            if self.arch_type == "encoder_decoder":
+                if model_args.model_name_or_path == 'THUDM/chatglm-6b':
+                    model_register = AutoModel
+                else:
+                    model_register = AutoModelForSeq2SeqLM
+            elif self.arch_type == "vision_encoder_decoder":
+                if not custom_model:
+                    model_register = AutoModelForVision2Seq
+                else:
+                    model_register = CustomAutoVision2SeqModel
             else:
-                if peft_model_id is not None:
-                    logger.warning(
-                        "LoRA does not support RAM optimized load currently."
-                        " Automatically use original load instead."
-                    )
-                self.backend_model = AutoModelForSeq2SeqLM.from_pretrained(
-                    model_args.model_name_or_path,
-                )
+                raise NotImplementedError
+            if not custom_model:
+                if model_args.model_name_or_path == 'THUDM/chatglm-6b':
+                    self.backend_model = model_register.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
 
-            self.tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
+                elif model_args.use_ram_optimized_load and peft_model_id is None:
+                    try:
+                        # RAM-optimized load
+                        self.backend_model = model_register.from_pretrained(
+                            model_args.model_name_or_path,
+                            device_map="auto",
+                            offload_folder="offload",
+                            offload_state_dict=True,
+                        )
+                    except:
+                        logger.warning(
+                            "Failed to use RAM optimized load. Automatically"
+                            " use original load instead."
+                        )
+                        # Normal load
+                        self.backend_model = model_register.from_pretrained(
+                            model_args.model_name_or_path,
+                        )
+                else:
+                    if peft_model_id is not None:
+                        logger.warning(
+                            "LoRA does not support RAM optimized load currently."
+                            " Automatically use original load instead."
+                        )
+                    self.backend_model = model_register.from_pretrained(
+                        model_args.model_name_or_path,
+                    )
+            # else:
+            #     self.backend_model = model_register.from_pretrained(
+            #         model_args.model_name_or_path)
+            else:
+                model = CustomAutoVision2SeqModel.from_pretrained(model_args.model_name_or_path)
+                if model_args.llm_model_name_or_path is not None:
+                    text_config = LlamaConfig.from_pretrained(model_args.llm_model_name_or_path)
+                    model.config.text_config = text_config
+                model.language_model_from_pretrained(model_args.llm_model_name_or_path,
+                                                     low_resource=model_args.low_resource)
+                state_dict = torch.load(model_args.checkpoint_path, map_location="cpu")
+                model.load_state_dict(state_dict, strict=False)
+                # model = CustomAutoVision2SeqModel.from_pretrained(
+                    # "/home/qlianab/checkpoints/pretrained_weights/minigpt4-lmflow-vicuna-7b-low_resource/"）
+                self.backend_model = model
+
+            if self.arch_type == "encoder_decoder":
+                tokenizer_register = AutoTokenizer
+            elif self.arch_type == "vision_encoder_decoder":
+                tokenizer_register = AutoProcessor
+            else:
+                raise NotImplementedError
+            self.tokenizer = tokenizer_register.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
+            if model_args.llm_model_name_or_path is not None:
+                self.tokenizer.tokenizer = LlamaTokenizer.from_pretrained(model_args.llm_model_name_or_path)
             self.backend_model_full = self.backend_model
             if peft_model_id is not None:
                 self.backend_model = PeftModel.from_pretrained(
                     self.backend_model, peft_model_id
                 )
-
             if device == "gpu":
                 deepspeed.init_distributed()
                 self.ds_engine = deepspeed.initialize(model=self.backend_model, config_params=ds_config)[0]
@@ -171,27 +218,28 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
 
         elif tune_strategy == 'adapter':
             raise NotImplementedError('adapter tune strategy not implemented')
-        
-        if self.tokenizer.eos_token_id is None:
-            self.tokenizer.eos_token_id = self.backend_model.config.eos_token_id
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+        if self.arch_type == "encoder_decoder":
+            if self.tokenizer.eos_token_id is None:
+                self.tokenizer.eos_token_id = self.backend_model.config.eos_token_id
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
     def tokenize(self, dataset, *args, **kwargs):
         """
         Tokenize the full dataset.
-    
+
         Parameters
         ------------
-        dataset : 
+        dataset :
             Text dataset.
-            
+
         args : Optional.
             Positional arguments.
-        
+
         kwargs : Optional.
-            Keyword arguments.    
-        
+            Keyword arguments.
+
         Returns
         ------------
         tokenized_datasets :
@@ -202,24 +250,29 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
     def encode(self, input: Union[str, List[str]], *args, **kwargs ) -> Union[List[int], List[List[int]]]:
         """
         Perform encoding process of the tokenizer.
-    
+
         Parameters
         ------------
         inputs : str or list.
             The text sequence.
-            
+
         args : Optional.
             Positional arguments.
-        
+
         kwargs : Optional.
-            Keyword arguments.    
-        
+            Keyword arguments.
+
         Returns
         ------------
         outputs :
             The tokenized inputs.
         """
-        if isinstance(input, list):
+        if isinstance(input, dict):
+            # TODO refactor the input type to make it elegant.
+            kwargs.update(input)
+            tokens = self.tokenizer(*args, **kwargs)
+            return tokens
+        elif isinstance(input, list):
             return self.tokenizer(text=input, *args, **kwargs)#batch encode,will automatically do left padding
         elif isinstance(input, str):
             return self.tokenizer.encode(text=input, *args, **kwargs)
@@ -230,18 +283,18 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
     def decode(self, input, *args, **kwargs ) -> Union[str, List[str]]:
         """
         Perform decoding process of the tokenizer.
-    
+
         Parameters
         ------------
         inputs : list.
             The token sequence.
-            
+
         args : Optional.
             Positional arguments.
-        
+
         kwargs : Optional.
-            Keyword arguments.    
-        
+            Keyword arguments.
+
         Returns
         ------------
         outputs :
@@ -259,31 +312,44 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
     def inference(self, inputs, *args, **kwargs):
         """
         Perform generation process of the model.
-    
+
         Parameters
         ------------
         inputs :
             The sequence used as a prompt for the generation or as model inputs to the model.
-            
+
         args : Optional.
             Positional arguments.
-        
+
         kwargs : Optional.
-            Keyword arguments.    
-        
+            Keyword arguments.
+
         Returns
         ------------
         outputs :
-            The generated sequence output 
+            The generated sequence output
         """
+        # current_time = time.strftime("%H:%M:%S", time.localtime())
+        # print(f"{current_time}: model.inference: start", flush=True)
 
+        # TODO need to discuss how to handle pad_token_id
+        if self.arch_type == "encoder_decoder":
+            kwargs.update(pad_token_id=self.tokenizer.pad_token_id)
+        elif self.arch_type == "vision_encoder_decoder":
+            # TODO disucss how to modify the interface to remove this part.
+            inputs = copy.deepcopy(inputs)
+            input_ids = inputs.pop('input_ids')
+            kwargs.update(**inputs)
+            inputs = input_ids
+
+        # current_time = time.strftime("%H:%M:%S", time.localtime())
+        # print(f"{current_time}: model.inference: kwargs update end", flush=True)
 
         with torch.no_grad():
             if self.device == "gpu":
                 outputs = self.ds_engine.module.generate(
                     input_ids=inputs,
                     synced_gpus=True,
-                    pad_token_id=self.tokenizer.pad_token_id,
                     *args,
                     **kwargs
                 )
@@ -291,7 +357,6 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
                 outputs = self.backend_model.generate(
                     input_ids=inputs,
                     synced_gpus=True,
-                    pad_token_id=self.tokenizer.pad_token_id,
                     *args,
                     **kwargs
                 )
@@ -299,6 +364,10 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
                 raise NotImplementedError(
                     f"device \"{self.device}\" is not supported"
                 )
+
+        # current_time = time.strftime("%H:%M:%S", time.localtime())
+        # print(f"{current_time}: model.inference: end", flush=True)
+
         return outputs
 
 
@@ -312,22 +381,22 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
     def save(self, dir, save_full_model=False, *args, **kwargs):
         """
         Perform generation process of the model.
-    
+
         Parameters
         ------------
         dir :
             The directory to save model and tokenizer
-            
+
         save_full_model : Optional.
             Whether to save full model.
-        
+
         kwargs : Optional.
-            Keyword arguments.    
-        
+            Keyword arguments.
+
         Returns
         ------------
         outputs :
-            The generated sequence output 
+            The generated sequence output
         """
         self.get_tokenizer().save_pretrained(dir)
         if save_full_model and self.model_args.use_lora:
@@ -340,7 +409,12 @@ class HFEncoderDecoderModel(EncoderDecoderModel, Tunable):
         """
         Return max acceptable input length in terms of tokens.
         """
-        return self.tokenizer.model_max_length
+        if "tokenizer" not in self.tokenizer.__dict__:
+            return self.tokenizer.model_max_length
+        else:
+            # for the multi-modality processor,
+            # the max length is stored in the inner text tokenizer
+            return self.tokenizer.tokenizer.model_max_length
 
 
     def get_tokenizer(self):
