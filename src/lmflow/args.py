@@ -78,7 +78,14 @@ class ModelArguments:
     use_int8 : bool
         a boolean indicating whether to load int8 quantization for inference.
     """
-
+    pruned_model: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "The model checkpoint for weights initialization.Don't set if you want to train a model from scratch."
+            )
+        },
+    )
     model_name_or_path: Optional[str] = field(
         default=None,
         metadata={
@@ -121,7 +128,7 @@ class ModelArguments:
                 "Model architecture type, e.g. \"decoder_only\","
                 " \"encoder_decoder\""
             ),
-            "choices": ["decoder_only", "encoder_decoder", "text_regression", "vision_encoder_decoder"],
+            "choices": ["decoder_only", "encoder_decoder", "text_regression", "vision_encoder_decoder", "pruned_decoder_only"],
         },
     )
     config_name: Optional[str] = field(
