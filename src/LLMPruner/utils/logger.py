@@ -25,7 +25,7 @@ class LoggerWithDepth():
         
         # Save Hyperparameters
         self.write_description_to_folder(os.path.join(self.log_dir, 'description.txt'), config)
-        self.best_checkpoint_path = os.path.join(self.log_dir, 'pytorch_model.bin')
+        self.best_checkpoint_path = self.log_dir
 
         if setup_sublogger:
             sub_name = time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime())
