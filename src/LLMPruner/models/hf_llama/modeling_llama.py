@@ -929,7 +929,7 @@ class PrunedLlamaPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
     def _set_gradient_checkpointing(self, module, value=False):
-        if isinstance(module, LlamaModel):
+        if isinstance(module, PrunedLlamaModel):
             module.gradient_checkpointing = value
 
 
