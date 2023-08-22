@@ -329,39 +329,44 @@ class HFPrunedDecoderModel(DecoderModel, Tunable):
                     )
                     model_args.use_ram_optimized_load = False
 
-                if model_args.use_ram_optimized_load and peft_model_id is None:
-                    try:
-                        # RAM-optimized load
-                        self.backend_model = AutoModelForCausalLM.from_pretrained(
-                            model_args.model_name_or_path,
-                            config=config,
-                            device_map="auto",
-                            offload_folder="offload",
-                            offload_state_dict=True,
-                            torch_dtype=torch_dtype,
-                        )
-                    except:
-                        logger.warning(
-                            "Failed to use RAM optimized load. Automatically"
-                            " use original load instead."
-                        )
-                        # Normal load
-                        self.backend_model = AutoModelForCausalLM.from_pretrained(
-                            model_args.model_name_or_path,
-                            config=config,
-                            torch_dtype=torch_dtype,
-                        )
-                else:
-                    if peft_model_id is not None:
-                        logger.warning(
-                            "LoRA does not support RAM optimized load currently."
-                            " Automatically use original load instead."
-                        )
-                    self.backend_model = AutoModelForCausalLM.from_pretrained(
-                        model_args.model_name_or_path,
-                        config=config,
-                        torch_dtype=torch_dtype,
-                    )
+                print("loading from local path: ",model_args.pruned_model)
+                pruned_dict = torch.load(model_args.pruned_model, map_location='cpu')
+                model = pruned_dict['model']
+                print('The dtype of the pruned model is ', model.dtype)
+                self.backend_model = model
+                # if model_args.use_ram_optimized_load and peft_model_id is None:
+                #     try:
+                #         # RAM-optimized load
+                #         self.backend_model = AutoModelForCausalLM.from_pretrained(
+                #             model_args.model_name_or_path,
+                #             config=config,
+                #             device_map="auto",
+                #             offload_folder="offload",
+                #             offload_state_dict=True,
+                #             torch_dtype=torch_dtype,
+                #         )
+                #     except:
+                #         logger.warning(
+                #             "Failed to use RAM optimized load. Automatically"
+                #             " use original load instead."
+                #         )
+                #         # Normal load
+                #         self.backend_model = AutoModelForCausalLM.from_pretrained(
+                #             model_args.model_name_or_path,
+                #             config=config,
+                #             torch_dtype=torch_dtype,
+                #         )
+                # else:
+                #     if peft_model_id is not None:
+                #         logger.warning(
+                #             "LoRA does not support RAM optimized load currently."
+                #             " Automatically use original load instead."
+                #         )
+                #     self.backend_model = AutoModelForCausalLM.from_pretrained(
+                #         model_args.model_name_or_path,
+                #         config=config,
+                #         torch_dtype=torch_dtype,
+                #     )
 
                 self.backend_model_full = self.backend_model
                 if peft_model_id is not None:
