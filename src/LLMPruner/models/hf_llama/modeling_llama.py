@@ -148,6 +148,7 @@ class LlamaMLP(nn.Module):
         hidden_act: str,
     ):
         super().__init__()
+        self.intermediate_size = intermediate_size
         self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
         self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
         self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)

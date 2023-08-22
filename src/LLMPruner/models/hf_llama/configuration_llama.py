@@ -228,3 +228,15 @@ class PrunedLlamaConfig(PretrainedConfig):
             tie_word_embeddings=self.tie_word_embeddings,
             **kwargs,
             )
+    def from_llama_config(self, config: LlamaConfig):
+        properties = vars(config)
+        self.__dict__.update(properties)
+        self.architectures = 'PrunedLlamaForCausalLM'
+        self.intermediate_size = [self.intermediate_size for _ in range(self.num_hidden_layers)]
+        self.num_attention_heads = [self.num_attention_heads for _ in range(self.num_hidden_layers)]
+
+    def from_llama_model(self, model):
+        self.from_llama_config(model.config)
+        for i, layer in enumerate(model.base_model.layers):
+            self.num_attention_heads[i] = layer.self_attn.num_heads
+            self.intermediate_size[i] = layer.mlp.intermediate_size
