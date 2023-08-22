@@ -86,6 +86,22 @@ try:
 except:
     pass
 
+from prettytable import PrettyTable
+
+def count_parameters(model):
+    table = PrettyTable(["Modules", "Parameters"])
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        params = parameter.shape
+        table.add_row([name, params])
+        total_params += parameter.numel()
+    print(table)
+    print(f"Total Trainable Params: {total_params}")
+    return total_params
+    
+
 class HFPrunedDecoderModel(DecoderModel, Tunable):
     r"""
     Initializes a HFDecoderModel instance.
@@ -263,6 +279,7 @@ class HFPrunedDecoderModel(DecoderModel, Tunable):
                 print("load from local path: ",model_args.pruned_model)
                 pruned_dict = torch.load(model_args.pruned_model, map_location='cpu')
                 model = pruned_dict['model']
+                count_parameters(model)
                 # if device == 'cuda':
                 #     model.half()
                 print('The dtype of the pruned model is ', model.dtype)
@@ -333,6 +350,7 @@ class HFPrunedDecoderModel(DecoderModel, Tunable):
                 pruned_dict = torch.load(model_args.pruned_model, map_location='cpu')
                 model = pruned_dict['model']
                 print('The dtype of the pruned model is ', model.dtype)
+                count_parameters(model)
                 self.backend_model = model
                 # if model_args.use_ram_optimized_load and peft_model_id is None:
                 #     try:
