@@ -51,5 +51,3 @@ evaluator = AutoPipeline.get_pipeline(
     pipeline_args=pipeline_args,
 )
 result = evaluator.evaluate(model=model, dataset=dataset, metric=pipeline_args.metric)
-
-torch.save(result,'/home/zhangyihan/projects/LMFlow/attn_result.pt')

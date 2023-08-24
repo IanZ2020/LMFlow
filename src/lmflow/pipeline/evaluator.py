@@ -150,8 +150,7 @@ class Evaluator(BasePipeline):
             print(f"Evaluating final negative log likelihood: {nll}")
             return nll
         elif metric in ["layer_importance"]:
-            cat_sim_results, mean_sim_results = self._evaluate_layer_importance(model, dataset, verbose=verbose)
-            return cat_sim_results, mean_sim_results
+            self._evaluate_layer_importance(model, dataset, verbose=verbose)
         elif metric in ["layer_attention_importance"]:
             result = self._evaluate_layer_attn_importance(model, dataset, verbose=verbose)
             return result
@@ -399,16 +398,21 @@ class Evaluator(BasePipeline):
                 output = hidden_states[i+1]
                 sim.append(cos(input,output))
             return torch.stack(sim).mean(dim=-1)
-
+        
+        gather_cat_sim_results = []
+        gather_mean_sim_results = []
         cat_sim_results = []
         mean_sim_results = []
+        
+        len_per_device = seq_len // self.world_size
+        current_batch = encodings.input_ids[:, self.local_rank*len_per_device:(self.local_rank+1)*len_per_device]
         prev_end_loc = 0
-        for begin_loc in range(0, seq_len, self.block_size):
-            end_loc = min(begin_loc + max_length, seq_len)
+        total_batch_size = len_per_device // self.block_size
+        count = 0
+        for begin_loc in range(0, len_per_device, self.block_size):
+            end_loc = min(begin_loc + max_length, len_per_device)
             trg_len = end_loc - prev_end_loc  # may be different from block_size on last loop
-            input_ids = encodings.input_ids[:, begin_loc:end_loc].to(device=self.local_rank)
-            target_ids = input_ids.clone()
-            target_ids[:, :-trg_len] = -100
+            input_ids = current_batch[:, begin_loc:end_loc].to(device=self.local_rank)
 
             with torch.no_grad():
                 outputs = model.get_backend_model().base_model.forward(input_ids,output_hidden_states=True)
@@ -420,14 +424,33 @@ class Evaluator(BasePipeline):
             cat_sim_results.append(cat_sim(hidden_states).squeeze())
             mean_sim_results.append(mean_sim(hidden_states).squeeze())
             prev_end_loc = end_loc
+            count += 1
+            print(f"rank{self.local_rank}: {count}/{total_batch_size}")
             if end_loc == seq_len:
                 break
-        cat_sim_results = torch.stack(cat_sim_results).transpose(dim0=0,dim1=1)
-        mean_sim_results = torch.stack(mean_sim_results).transpose(dim0=0,dim1=1)
-        print(cat_sim_results.shape, mean_sim_results.shape)
-        print("Cat_Sim for All Layers",cat_sim_results.mean(dim=-1), "Cat_Sim_Rank: ",cat_sim_results.mean(dim=-1).argsort(dim=-1))
-        print("Mean_Sim for All Layers", mean_sim_results.mean(dim=-1),"Mean_Sim_Rank: ",mean_sim_results.mean(dim=-1).argsort(dim=-1))
-        return cat_sim_results, mean_sim_results
+        
+        cat_sim_results = torch.stack(cat_sim_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        mean_sim_results = torch.stack(mean_sim_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        print(f"rank{self.local_rank}:\nCat_Sim for All Layers{cat_sim_results.mean(dim=-1)}\nMean_Sim for All Layers{mean_sim_results.mean(dim=-1)}")
+
+        cat_sim_results.mean(dim=-1).argsort(dim=-1)
+
+        all_process = torch.stack([cat_sim_results.mean(dim=-1), mean_sim_results.mean(dim=-1)])
+
+        dist.all_reduce(all_process, dist.ReduceOp.SUM, async_op=False)
+        result = all_process
+        
+        cat_sim_results = result[0]
+        mean_sim_results = result[1]
+
+        # output_dict = {"mean_sim_results": mean_sim_results,
+        #                 "cat_sim_results": cat_sim_results,
+        # }
+        # all_process_list = [{}] * self.world_size
+        # dist.gather_object(output_dict, all_process_list if dist.get_rank() == 0 else None, dst=0)
+
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            print(f"rank{self.local_rank}:\nCat_Sim for All Layers{cat_sim_results}, Rank between layers: {cat_sim_results.argsort(dim=-1)}\nMean_Sim for All Layers{mean_sim_results}, , Rank between layers: {mean_sim_results.argsort(dim=-1)}")
 
     def _evaluate_layer_attn_importance(self, model, dataset: Dataset, verbose=True):
         data_dict = dataset.to_dict()
