@@ -78,6 +78,14 @@ class ModelArguments:
     use_int8 : bool
         a boolean indicating whether to load int8 quantization for inference.
     """
+    max_shard_size: Optional[str] = field(
+        default="5GB",
+        metadata={
+            "help": (
+                "The model checkpoint for weights initialization.Don't set if you want to train a model from scratch."
+            )
+        },
+    )
     pruned_model: Optional[str] = field(
         default=None,
         metadata={
