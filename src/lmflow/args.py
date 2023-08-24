@@ -498,6 +498,12 @@ class EvaluatorArguments:
     repetition_penalty : float
         An argument of model.generate in huggingface to penalize repetitions.
     """
+    batch_size: int = field(
+        default=4,
+        metadata={"help": "For distributed training: local_rank"
+        }
+    )
+
     local_rank: int = field(
         default=-1,
         metadata={"help": "For distributed training: local_rank"

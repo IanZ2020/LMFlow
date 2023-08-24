@@ -71,6 +71,7 @@ class Evaluator(BasePipeline):
         train_batch_size = self.evaluator_args.inference_batch_size_per_device * self.world_size
         self.evaluator_args.minibatch_size = train_batch_size
         self.block_size = evaluator_args.evaluate_block_size
+        self.batch_size = evaluator_args.batch_size
         # dataloader, data_size = create_dataloader(args)    # load dataset
 
 
@@ -379,6 +380,7 @@ class Evaluator(BasePipeline):
 
         if verbose:
             print(f"The maximum sequence length : {max_length}")
+        encode_batch_num = encodings.input_ids.size(0)
         seq_len = encodings.input_ids.size(1)
 
         def cat_sim(hidden_states):
@@ -406,13 +408,16 @@ class Evaluator(BasePipeline):
         
         len_per_device = seq_len // self.world_size
         current_batch = encodings.input_ids[:, self.local_rank*len_per_device:(self.local_rank+1)*len_per_device]
-        prev_end_loc = 0
-        total_batch_size = len_per_device // self.block_size
+
+        num_of_example = len_per_device // self.block_size
+        num_of_batch = num_of_example // self.batch_size * encode_batch_num
+        print(current_batch.shape)
+        current_batch = current_batch[:,0: num_of_batch*self.batch_size*self.block_size].view(num_of_batch, self.batch_size, self.block_size)
+
         count = 0
-        for begin_loc in range(0, len_per_device, self.block_size):
-            end_loc = min(begin_loc + max_length, len_per_device)
-            trg_len = end_loc - prev_end_loc  # may be different from block_size on last loop
-            input_ids = current_batch[:, begin_loc:end_loc].to(device=self.local_rank)
+        for id in range(0, num_of_batch):
+            
+            input_ids = current_batch[id].to(device=self.local_rank)
 
             with torch.no_grad():
                 outputs = model.get_backend_model().base_model.forward(input_ids,output_hidden_states=True)
@@ -421,13 +426,10 @@ class Evaluator(BasePipeline):
                 # to the left by 1.
                 hidden_states = outputs.hidden_states
 
-            cat_sim_results.append(cat_sim(hidden_states).squeeze())
-            mean_sim_results.append(mean_sim(hidden_states).squeeze())
-            prev_end_loc = end_loc
+            cat_sim_results.append(cat_sim(hidden_states).mean(dim=-1))
+            mean_sim_results.append(mean_sim(hidden_states).mean(dim=-1))
             count += 1
-            print(f"rank{self.local_rank}: {count}/{total_batch_size}")
-            if end_loc == seq_len:
-                break
+            print(f"rank{self.local_rank}: {count}/{num_of_batch}") 
         
         cat_sim_results = torch.stack(cat_sim_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
         mean_sim_results = torch.stack(mean_sim_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
