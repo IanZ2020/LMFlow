@@ -297,7 +297,7 @@ class MetaPruner:
                 if ch_groups > 1:
                     imp = imp[:len(imp)//ch_groups]
                 if consecutive_groups > 1:
-                    imp = imp.view(-1, consecutive_groups).sum(1)
+                    imp = imp.view(-1, consecutive_groups).sum(1) / consecutive_groups
                 global_importance.append((group, ch_groups, consecutive_groups, imp))
 
         imp = torch.cat([local_imp[-1]

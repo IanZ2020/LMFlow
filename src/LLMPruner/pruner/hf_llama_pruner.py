@@ -256,7 +256,7 @@ class TaylorImportance(tp.importance.Importance):
                 salience = {}
                 for sub_layer in [layer.o_proj, layer.q_proj, layer.k_proj, layer.v_proj]:
                     salience[sub_layer] = sub_layer.weight * sub_layer.weight.grad
-                    
+
                     if self.taylor in ['param_second']:
                         salience[sub_layer] = sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight
                     elif self.taylor in ['param_mix']: 
@@ -274,7 +274,7 @@ class TaylorImportance(tp.importance.Importance):
                 if self.taylor == 'vectorize':
                     local_norm = salience.sum(1).abs()
                 elif 'param' in self.taylor:
-                    local_norm = salience.abs().sum(1)
+                    local_norm = salience.abs().sum(1) / salience.shape[1]
                 else:
                     raise NotImplementedError
                 group_imp.append(local_norm)
@@ -284,7 +284,7 @@ class TaylorImportance(tp.importance.Importance):
                 if self.taylor == 'vectorize':
                     local_norm = salience.sum(0).abs()
                 elif 'param' in self.taylor:
-                    local_norm = salience.abs().sum(0)
+                    local_norm = salience.abs().sum(0) / salience.shape[0]
                 else:
                     raise NotImplementedError
                 local_norm = local_norm[idxs]
