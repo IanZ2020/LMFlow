@@ -4,7 +4,6 @@
 """
 
 from lmflow.models.hf_decoder_model import HFDecoderModel
-from lmflow.models.hf_decoder_model_pruned import HFPrunedDecoderModel
 from lmflow.models.text_regression_model import TextRegressionModel
 from lmflow.models.hf_encoder_decoder_model import HFEncoderDecoderModel
 
