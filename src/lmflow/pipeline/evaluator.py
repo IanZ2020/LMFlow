@@ -339,17 +339,22 @@ class Evaluator(BasePipeline):
         
         if verbose:
             print(f"The maximum sequence length : {max_length}")
+        encode_batch_num = encodings.input_ids.size(0)
         seq_len = encodings.input_ids.size(1)
 
         nlls = []
-        prev_end_loc = 0
-        for begin_loc in range(0, seq_len, self.block_size):
-            end_loc = min(begin_loc + max_length, seq_len)
-            trg_len = end_loc - prev_end_loc  # may be different from block_size on last loop
-            input_ids = encodings.input_ids[:, begin_loc:end_loc].to(device=self.local_rank)
-            target_ids = input_ids.clone()
-            target_ids[:, :-trg_len] = -100
+        len_per_device = seq_len // self.world_size
+        current_batch = encodings.input_ids[:, self.local_rank*len_per_device:(self.local_rank+1)*len_per_device]
 
+        num_of_example = len_per_device // self.block_size
+        num_of_batch = num_of_example // self.batch_size * encode_batch_num
+        current_batch = current_batch[:,0: num_of_batch*self.batch_size*self.block_size].view(num_of_batch, self.batch_size, self.block_size)
+
+        count = 0
+        for id in range(0, num_of_batch):
+            input_ids = current_batch[id].to(device=self.local_rank)
+            target_ids = input_ids.clone()
+            trg_len = self.block_size
             with torch.no_grad():
                 outputs = model.get_backend_model()(input_ids, labels=target_ids)
                 # loss is calculated using CrossEntropyLoss which averages over valid labels
@@ -358,13 +363,23 @@ class Evaluator(BasePipeline):
                 neg_log_likelihood = outputs.loss
 
             nlls.append(neg_log_likelihood)
-            prev_end_loc = end_loc
+            count += 1
+
             if verbose:
-                print(f"Evaluating PPL: {int(begin_loc/self.block_size) + 1} / {int(seq_len/self.block_size)} Complete, current ppl : {torch.exp(torch.stack(nlls).mean())}")
-            if end_loc == seq_len:
-                break
+                print(f"rank{self.local_rank}, Evaluating PPL: {count} / {num_of_batch} Complete, current ppl : {torch.exp(torch.stack(nlls).mean())}")
+            
         ppl = torch.exp(torch.stack(nlls).mean())
-        return ppl
+        
+        all_process = ppl
+        dist.all_reduce(all_process, dist.ReduceOp.SUM, async_op=False)
+        result = all_process / self.world_size
+        
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            with open('/home/zhangyihan/projects/LMFlow/output_models/eval_results.txt', 'a') as f:
+                f.write(f'model_name_or_path: {self.model_args.model_name_or_path}, dataset_path: {self.data_args.dataset_path}, block_size: {self.evaluator_args.evaluate_block_size}, metric:{self.evaluator_args.metric}')
+                f.write(f"Eval result: {result}")
+                f.write("\n******************************\n")
+        return result
 
     def _evaluate_layer_importance(self, model, dataset: Dataset, verbose=True):
         data_dict = dataset.to_dict()
