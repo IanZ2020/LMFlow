@@ -7,9 +7,8 @@ fi
 deepspeed ${deepspeed_args} examples/evaluation.py \
     --answer_type text \
     --model_name_or_path $2 \
-    --arch_type  pruned_decoder_only\
-    --dataset_path $3 \
+    --dataset_path data/ \
     --deepspeed examples/ds_config.json \
     --metric ppl \
     --evaluate_block_size 2048 \
-    --batch_size 4
+    --batch_size 2
