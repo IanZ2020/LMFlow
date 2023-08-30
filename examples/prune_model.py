@@ -60,7 +60,12 @@ def average_gradients(model):
     size = float(dist.get_world_size())
     for param in model.parameters():
         dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+    print(list(model.parameters())[0].grad.sum())
         # param.grad.data /= size
+        # if hasattr(param, 'acc_grad'):
+        #     param.acc_grad += (param.grad * param.grad).detach().to('cpu')
+        # else:
+        #     param.acc_grad = (param.grad * param.grad).detach().to('cpu')
 
 def set_random_seed(seed):
     random.seed(seed)
@@ -261,8 +266,9 @@ def main(model_args, data_args, args):
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
                     # ds_engine.backward(loss)
-                    average_gradients(model)
-                    del loss.grad
+                average_gradients(model)
+                del loss.grad
+                    
             pruner.step()
 
             if is_deepspeed_zero3_enabled():
