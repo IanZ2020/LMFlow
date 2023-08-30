@@ -278,6 +278,7 @@ def main(model_args, data_args, args):
                     loss = ds_engine.module(batch_input, labels=batch_input).loss
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
+                    acc_grad(model)
                     
                 average_gradients(model)
                 del loss.grad
