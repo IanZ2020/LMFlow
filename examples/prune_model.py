@@ -72,8 +72,12 @@ def acc_grad(model):
 def average_gradients(model):
     size = float(dist.get_world_size())
     for param in model.parameters():
+        param.offload_grad = param.offload_grad.to(dist.get_rank())
         dist.all_reduce(param.offload_grad.data, op=dist.ReduceOp.SUM)
+        param.offload_grad = param.offload_grad.to('cpu')
+        param.acc_grad = param.acc_grad.to(dist.get_rank())
         dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
+        param.acc_grad = param.acc_grad.to('cpu')
         # param.grad.data /= size
         # if hasattr(param, 'acc_grad'):
         #     param.acc_grad += (param.grad * param.grad).detach().to('cpu')
@@ -179,7 +183,6 @@ def main(model_args, data_args, args):
             torch_dtype = torch_dtype,
             config = config
         )
-    model.to(device = local_rank)
     ds_engine = deepspeed.initialize(model=model, config_params=ds_config)[0]
 
     if args.test_before_train:
