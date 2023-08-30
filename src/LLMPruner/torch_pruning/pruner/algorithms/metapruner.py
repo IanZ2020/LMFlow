@@ -310,7 +310,7 @@ class MetaPruner:
         
         if n_pruned <= 0:
             return
-        topk_imp, _ = torch.topk(imp, k=n_pruned, largest=False)
+        topk_imp, _ = torch.topk(imp.to(dtype=torch.float32), k=n_pruned, largest=False)
         
         # global pruning through thresholding
         thres = topk_imp[-1]
