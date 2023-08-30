@@ -78,16 +78,8 @@ class ModelArguments:
     use_int8 : bool
         a boolean indicating whether to load int8 quantization for inference.
     """
-    max_shard_size: Optional[str] = field(
+    max_shard_size: str = field(
         default="5GB",
-        metadata={
-            "help": (
-                "The model checkpoint for weights initialization.Don't set if you want to train a model from scratch."
-            )
-        },
-    )
-    pruned_model: Optional[str] = field(
-        default=None,
         metadata={
             "help": (
                 "The model checkpoint for weights initialization.Don't set if you want to train a model from scratch."
@@ -810,6 +802,212 @@ class BenchmarkingArguments:
         },
     )
 
+@dataclass
+class PrunerArguments():
+    iterative_steps: int = field(
+        default=1,
+        metadata={
+            'help':"Iteration step for pruning. Default=1"
+        }
+
+    )
+    prune_batch_size: int = field(
+        default=16,
+        metadata={
+            "help": (
+                'batch size'
+            ),
+        },
+    )
+
+    prune_block_size: int = field(
+        default=1024,
+        metadata={
+            "help": (
+                'block size'
+            ),
+        },
+    )
+
+    num_examples: int  = field(
+        default=16,
+        metadata={
+            "help": (
+                'number of examples when doing forward'
+            ),
+        },
+    )
+
+    deepspeed: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Enable deepspeed and pass the path to deepspeed json config file (e.g. ds_config.json) or an already"
+                " loaded json file as a dict"
+            )
+        },
+    )
+
+    local_rank: int = field(
+        default=-1,
+        metadata={"help": "For distributed training: local_rank"
+        },
+    )
+
+    device: str = field(
+        default="cuda",
+        metadata={
+            "help": "device of chatbot",
+            "choices": ["gpu", "cpu", "cuda"],
+        },
+    )
+
+    output_dir: str = field(
+        default="./output_dir",
+        metadata={"help": "Output path for the inferenced results"},
+    )
+
+    pruning_ratio: float = field(
+        default=0.5,
+        metadata={"help": "pruning ratio"
+        },
+    )
+
+    pruner_type: str = field(
+        default="taylor",
+        metadata={
+            "help": "pruner type",
+            "choices": ['random', 'l2', 'l1', 'taylor'],
+        },
+    )
+
+    channel_wise: bool = field(
+        default=False,
+        metadata={
+            "help": "channel wise",
+        },
+    )
+
+    block_wise: bool = field(
+        default=False,
+        metadata={
+            "help": "block wise",
+        },
+    )
+
+    layer_wise: bool = field(
+        default=False,
+        metadata={
+            "help": "layer wise",
+        },
+    )
+
+    layer: int = field(
+        default=12,
+        metadata={
+            "help": "remain the previous n layers",
+        },
+    )
+    
+    block_attention_layer_start: int = field(
+        default=4,
+        metadata={
+            "help": "start layer of block attention layers",
+        },
+    )
+
+    block_attention_layer_end: int = field(
+        default=12,
+        metadata={
+            "help": "end layer of block attention layers",
+        },
+    )
+
+    block_mlp_layer_start: int = field(
+        default=4,
+        metadata={
+            "help": "end layer of block mlp layers",
+        },
+    )
+
+    block_mlp_layer_end: int = field(
+        default=12,
+        metadata={
+            "help": "end layer of block mlp layers",
+        },
+    )
+    
+    grouping_strategy: str = field(
+        default='sum', 
+        metadata={
+            "help": 'Reduce method for grouping'
+        },
+    )
+
+    global_pruning: bool = field(
+        default=False,
+        metadata={
+            "help": 'whether global pruning'
+        },
+    )
+
+    taylor: str = field(
+        default='param_first', 
+        metadata={
+            "help": 'taylor order for importance estimation',
+            "choices": ['vectorize', 'param_second', 'param_first', 'param_mix'],
+        },
+    )
+    
+    test_before_train: bool = field(
+        default=False, 
+        metadata={
+            "help": 'whether to run eval before pruning'
+        },
+    )
+
+    test_after_train: bool = field(
+        default=False, 
+        metadata={
+            "help": 'whether to run eval after pruning'
+        },
+    )
+
+    seed: int = field(
+        default=42, 
+        metadata={
+            "help": 'seed'
+        },
+    )
+
+    save_model: bool = field(
+        default=False,
+        metadata={
+            "help": 'if save model'
+        },
+    )
+
+    temperature: float = field(
+        default=1.0,
+        metadata={
+            "help": 'generation temperature'
+        },
+    )
+
+    top_p: int = field(
+        default=0.95,
+        metadata={
+            "help": 'generation top p'
+        },
+    )
+
+    max_seq_len: int = field(
+        default=128,
+        metadata={
+            "help": 'generation max seq length'
+        },
+    )
+
 
 
 PIPELINE_ARGUMENT_MAPPING = {
@@ -817,6 +1015,7 @@ PIPELINE_ARGUMENT_MAPPING = {
     "evaluator": EvaluatorArguments,
     "inferencer": InferencerArguments,
     "raft_aligner": RaftAlignerArguments,
+    "pruner": PrunerArguments,
 }
 
 

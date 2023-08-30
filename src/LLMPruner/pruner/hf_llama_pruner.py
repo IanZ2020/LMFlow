@@ -261,32 +261,37 @@ class TaylorImportance(tp.importance.Importance):
                             salience[sub_layer] = sub_layer.weight * sub_layer.weight.grad
 
                             if self.taylor in ['param_second']:
-                                salience[sub_layer] = sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight
+                                salience[sub_layer] = sub_layer.weight * (sub_layer.weight.grad * sub_layer.weight.grad) * sub_layer.weight
                             elif self.taylor in ['param_mix']: 
-                                salience[sub_layer] = -salience + 0.5 * sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight
+                                salience[sub_layer] = -salience + 0.5 * sub_layer.weight * (sub_layer.weight.grad * sub_layer.weight.grad) * sub_layer.weight
                     else:
                         salience[sub_layer] = sub_layer.weight * sub_layer.weight.grad
 
                         if self.taylor in ['param_second']:
-                            salience[sub_layer] = sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight
+                            salience[sub_layer] = sub_layer.weight * (sub_layer.weight.grad * sub_layer.weight.grad) * sub_layer.weight
                         elif self.taylor in ['param_mix']: 
-                            salience[sub_layer] = -salience + 0.5 * sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight   
+                            salience[sub_layer] = -salience + 0.5 * sub_layer.weight * (sub_layer.weight.grad * sub_layer.weight.grad) * sub_layer.weight   
             else:
                 if is_deepspeed_zero3_enabled():
                     import deepspeed
-                    with deepspeed.zero.GatheredParameters([layer.weight], modifier_rank=0):
-                        salience = layer.weight * layer.weight.grad
-                        if self.taylor in ['param_second']:
+                    with deepspeed.zero.GatheredParameters([layer.weight]):
+                        if self.taylor in ['param_first']:
+                            salience = layer.weight * layer.weight.grad
+                            layer.weight.grad = None
+                            torch.cuda.empty_cache()
+                        elif self.taylor in ['param_second']:
                             salience = layer.weight * layer.weight.acc_grad * layer.weight
                         elif self.taylor in ['param_mix']: 
-                            salience = salience - 0.5 * layer.weight * layer.weight.acc_grad * layer.weight
+                            salience = layer.weight * layer.weight.grad - 0.5 * layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
                 else:
-                    salience = layer.weight * layer.weight.grad
-
-                    if self.taylor in ['param_second']:
+                    if self.taylor in ['param_first']:
+                            salience = layer.weight * layer.weight.grad
+                            layer.weight.grad = None
+                            torch.cuda.empty_cache()
+                    elif self.taylor in ['param_second']:
                         salience = layer.weight * layer.weight.acc_grad * layer.weight
                     elif self.taylor in ['param_mix']: 
-                        salience = salience - 0.5 * layer.weight * layer.weight.acc_grad * layer.weight
+                        salience = layer.weight * layer.weight.grad - 0.5 * layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
                     
             # Linear out_channels
             if prune_fn in [tp.prune_linear_out_channels, hf_linear_pruner.prune_out_channels]:

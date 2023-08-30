@@ -9,18 +9,23 @@ import argparse
 from typing import Tuple
 import deepspeed
 import torch.distributed as dist
+from lmflow.datasets.dataset import Dataset
 from transformers.deepspeed import HfDeepSpeedConfig,is_deepspeed_zero3_enabled, deepspeed_config
 import torch
 import numpy as np
-from transformers import LlamaTokenizer
+from transformers import LlamaTokenizer, HfArgumentParser
 from LLMPruner.models.hf_llama.modeling_llama import LlamaForCausalLM, LlamaRMSNorm, LlamaAttention, LlamaMLP
 from LLMPruner.models.hf_llama import (
     LlamaConfig,
     PrunedLlamaForCausalLM, 
     PrunedLlamaConfig
 )
+from lmflow.args import (
+    ModelArguments,
+    AutoArguments,
+    DatasetArguments
+)
 from lmflow import save_zero3_model
-from lmflow.datasets.dataset import Dataset
 import LLMPruner.torch_pruning as tp 
 from LLMPruner.pruner import hf_llama_pruner as llama_pruner
 from LLMPruner.utils.logger import LoggerWithDepth
@@ -51,19 +56,19 @@ try:
 except:
     pass
 
-def average_gradients(model, num_of_example):
+def average_gradients(model):
     size = float(dist.get_world_size())
     for param in model.parameters():
         dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-        param.grad.data /= size
+        # param.grad.data /= size
 
 def set_random_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    
-def main(args):
+
+def main(model_args, data_args, args):
     set_random_seed(args.seed)
     
     local_rank = int(os.getenv("LOCAL_RANK", "0"))
@@ -76,31 +81,31 @@ def main(args):
     deepspeed.init_distributed()
 
     logger = LoggerWithDepth(
-        env_name="{}".format(args.save_ckpt_log_name), 
+        env_name="{}".format(args.output_dir), 
         config=args.__dict__,
         root_dir='prune_log',
         setup_sublogger=True,
         local_rank = local_rank
     )
 
-    tokenizer = LlamaTokenizer.from_pretrained(args.base_model)
+    tokenizer = LlamaTokenizer.from_pretrained(model_args.model_name_or_path)
 
     torch_dtype = (
-            args.torch_dtype
-            if args.torch_dtype in ["auto", None]
-            else getattr(torch, args.torch_dtype)
+            model_args.torch_dtype
+            if model_args.torch_dtype in ["auto", None]
+            else getattr(torch, model_args.torch_dtype)
     )
 
-    if args.is_base_model_pruned:
-        config = PrunedLlamaConfig.from_pretrained(args.base_model)
+    if model_args.arch_type == 'pruned_decoder_only':
+        config = PrunedLlamaConfig.from_pretrained(model_args.model_name_or_path)
     else: 
-        config = LlamaConfig.from_pretrained(args.base_model)
+        config = LlamaConfig.from_pretrained(model_args.model_name_or_path)
 
     supported_gpu_device = None
     for gpu in GPU_SUPPORT_FLASH_ATTENTION:
         if gpu in torch.cuda.get_device_name():
             supported_gpu_device = gpu
-    if args.use_flash_attention:
+    if model_args.use_flash_attention:
         if not any(model_supported in config.architectures
                     for model_supported in MODELS_SUPPORT_FLASH_ATTENTION):
             logger.warning(
@@ -144,15 +149,15 @@ def main(args):
                     " flash attention, use normal attention layer instead"
                 )
 
-    if args.is_base_model_pruned:
+    if model_args.arch_type == 'pruned_decoder_only':
         model = PrunedLlamaForCausalLM.from_pretrained(
-            args.base_model,
+            model_args.model_name_or_path,
             config = config,
             torch_dtype = torch_dtype
         )
     else:
         model = LlamaForCausalLM.from_pretrained(
-            args.base_model,
+            model_args.model_name_or_path,
             torch_dtype = torch_dtype,
             config = config
         )
@@ -161,10 +166,10 @@ def main(args):
 
     if args.test_before_train:
         logger.log("\n==================Generation Results before Pruning================\n")
-        model.eval()
+        ds_engine.module.eval()
         with torch.no_grad():
             for prompt in prompts:
-                input_ids = tokenizer(prompt, return_tensors="pt")['input_ids'].to(args.device)
+                input_ids = tokenizer(prompt, return_tensors="pt")['input_ids'].to(local_rank)
 
                 generation_output = model.generate(
                     input_ids=input_ids,
@@ -177,12 +182,11 @@ def main(args):
                 
                 result = tokenizer.decode(generation_output[0])
                 logger.log(result)
-    
-        ppl = PPLMetric(model, tokenizer, ['wikitext2', 'ptb'], args.max_seq_len, device=args.device)
+
+        ppl = evaluate_ppl(ds_engine.module, tokenizer, dataset = Dataset(data_args), block_size = data_args.block_size)
         logger.log("PPL before pruning: {}".format(ppl))
 
-    pruner_type = args.pruner_type.lower()
-    assert pruner_type in ['random', 'l2', 'l1', 'taylor']
+    pruner_type = args.pruner_type
 
     for param in model.parameters():
         param.requires_grad_(True)
@@ -191,7 +195,6 @@ def main(args):
         before_pruning_parameters = sum(p.ds_numel for p in model.parameters() if p.requires_grad)
     else:
         before_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print('before_pruning_parameters', before_pruning_parameters)
     
     forward_prompts = torch.tensor([
         [    1,   306,  4658,   278,  6593,   310,  2834,   338],
@@ -237,18 +240,18 @@ def main(args):
             forward_prompts,
             **kwargs
         )
-        model.zero_grad()
+        ds_engine.module.zero_grad()
         ds_engine.module.train()
         logger.log("Start Pruning")
         for i in range(args.iterative_steps):
 
             if pruner_type in ['taylor']:
-                example_prompts = get_examples('redpajama', tokenizer, args.num_examples, seq_len = args.block_size).to(device = local_rank)
-                batch_num = args.num_examples // args.batch_size
+                example_prompts = get_examples('redpajama', tokenizer, args.num_examples, seq_len = args.prune_block_size).to(device = local_rank)
+                batch_num = args.num_examples // args.prune_batch_size
                 batch_num_per_device = batch_num // world_size
                 batch_num = batch_num_per_device * world_size
 
-                example_prompts = example_prompts[0: args.batch_size * batch_num].view(batch_num, args.batch_size, args.block_size)
+                example_prompts = example_prompts[0: args.prune_batch_size * batch_num].view(batch_num, args.prune_batch_size, args.prune_block_size)
                 current_batch = example_prompts[local_rank*batch_num_per_device : (local_rank+1)*batch_num_per_device]
 
                 logger.log("Start Backwarding in iterative steps = {}...".format(i))
@@ -258,7 +261,7 @@ def main(args):
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
                     # ds_engine.backward(loss)
-                    average_gradients(model, args.num_examples)
+                    average_gradients(model)
                     del loss.grad
             pruner.step()
 
@@ -278,6 +281,7 @@ def main(args):
             # modify inferece-related attributes
             for layer in model.model.layers:
                 layer.self_attn.num_heads = layer.self_attn.q_proj.out_features // layer.self_attn.head_dim
+
         # Clean the gradient in the model
         model.zero_grad()
         for name, module in model.named_parameters():
@@ -304,11 +308,11 @@ def main(args):
         }
 
         pruner = tp.pruner.MetaPruner(
-            model,
+            ds_engine.module,
             forward_prompts,
             **kwargs
         )
-        model.zero_grad()
+        ds_engine.module.zero_grad()
         
         logger.log("Start Pruning")
         for i in range(args.iterative_steps):
@@ -349,7 +353,6 @@ def main(args):
     gc.collect()
     torch.cuda.empty_cache()
 
-    
     if args.save_model:
         print('saving model')
         model.half()
@@ -364,90 +367,19 @@ def main(args):
         print('done')
     if not dist.is_initialized() or dist.get_rank() == 0:
         tokenizer.save_pretrained(logger.best_checkpoint_path)
-
+        
     dist.barrier()
 
-    # model.config.pad_token_id = tokenizer.pad_token_id = 0 
-    # model.config.bos_token_id = 1
-    # model.config.eos_token_id = 2
-
-    # if args.test_after_train:
-    #     logger.log("\n==================Generation Results After Pruning================\n")
-        
-    #     ds_engine.module.eval()
-    #     with torch.no_grad():
-    #         for prompt in prompts:
-    #             input_ids = tokenizer(prompt, return_tensors="pt")['input_ids'].to(args.eval_device)
-
-    #             generation_output = ds_engine.module.generate(
-    #                 input_ids=input_ids,
-    #                 do_sample=True,
-    #                 top_k=50,
-    #                 max_length=args.max_seq_len,
-    #                 top_p=args.top_p,
-    #                 temperature=args.temperature,
-    #             )
-                
-    #             result = tokenizer.decode(generation_output[0])
-    #             logger.log(result)
-        
-    #     logger.log("\n==================Finish================\n")
-        
-    dataset = Dataset(args)
-    ppl = evaluate_ppl(ds_engine.module, tokenizer, dataset = dataset, block_size = args.block_size)
-    logger.log("PPL after pruning: {}".format(ppl))
-    logger.log("Memory Requirement: {} MiB\n".format(torch.cuda.memory_allocated()/1024/1024))
+    if args.test_after_train:
+        dataset = Dataset(data_args)
+        ppl = evaluate_ppl(ds_engine.module, tokenizer, dataset = dataset, block_size = data_args.block_size)
+        logger.log("PPL after pruning: {}".format(ppl))
+        logger.log("Memory Requirement: {} MiB\n".format(torch.cuda.memory_allocated()/1024/1024))
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Pruning LLaMA (huggingface version)')
-
-    # argument for parsing
-    parser.add_argument('--base_model', type=str, default="decapoda-research/llama-7b-hf", help='base model name')
-    parser.add_argument('--batch_size', type=int, default=4, help='batch_size')
-    parser.add_argument('--eval_batch_size', type=int, default=4, help='batch_size')
-    parser.add_argument('--block_size', type=int, default=1024, help='deepspeed config')
-    parser.add_argument('--deepspeed', type=str, default="configs/ds_config_zero2.json", help='deepspeed config')
-    parser.add_argument('--local_rank', type=int, default=0, help='deepspeed local rank')
-    parser.add_argument('--torch_dtype', type=str, default="float16", help='torch dtype')
-    parser.add_argument('--is_base_model_pruned', action='store_true', help='whether the base model is pruned')
-    parser.add_argument('--use_flash_attention', action='store_true', help='whether to use flash attention')
-    parser.add_argument('--gradient_checkpointing', action='store_true', help='whether to use gradient checkpointing')
-    parser.add_argument('--save_ckpt_log_name', type=str, default="llama_prune", help='the path for save the checkpoint and the log. The final path would be log/{your_name_here}_{pruner_type}_{pruning_ratio}')
-    parser.add_argument('--pruning_ratio', type=float, default=0.5, help='pruning ratio')
-    parser.add_argument('--pruner_type', type=str, default='l2', help='pruner type')
-
-    # argument for generation
-    parser.add_argument('--temperature', type=float, default=1.0, help='temperature')
-    parser.add_argument('--top_p', type=float, default=0.95, help='top p')
-    parser.add_argument('--max_seq_len', type=int, default=128, help='max sequence length')
-
-    # argument for layer-wise pruning/column-wise pruning
-    parser.add_argument('--channel_wise', action='store_true', help='channel wise')
-    parser.add_argument('--block_wise', action='store_true', help='block wise')
-    parser.add_argument('--layer_wise', action='store_true', help='layer wise')
-    parser.add_argument('--layer', type=int, default=12, help='remain the previous n layers')
-
-    parser.add_argument('--block_attention_layer_start', type=int, help='start layer of block attention layers', default=3)
-    parser.add_argument('--block_attention_layer_end', type=int, help='end layer of block attention layers', default=31)
-    parser.add_argument('--block_mlp_layer_start', type=int, help='start layer of block mlp layers', default=3)
-    parser.add_argument('--block_mlp_layer_end', type=int, help='end layer of block mlp layers', default=31)
-
-    parser.add_argument('--iterative_steps', type=int, default=1, help="Iteration step for pruning. Default=1")
-    parser.add_argument('--grouping_strategy', type=str, default='sum', help='Reduce method for grouping')
-    parser.add_argument('--global_pruning', action='store_true', help='whether global pruning')
-    parser.add_argument('--taylor', type=str, default='param_first', help='choose from [vectorize, param_second, param_first, param_mix]')
-    parser.add_argument('--num_examples', type=int, default=10)
-
-    # general argument
-    parser.add_argument('--device', type=str, default="cuda", help='device')
-    parser.add_argument('--test_before_train', action='store_true', help='whether test before train')
-    parser.add_argument('--eval_device', type=str, default="cuda", help='eval device')
-    parser.add_argument('--test_after_train', action='store_true', help='whether test after train')
-    parser.add_argument('--dataset_path', type=str, default='data/wikitext-2-raw-v1/test', help='seed')
-    parser.add_argument('--seed', type=int, default=42, help='seed')
-    parser.add_argument('--save_model', action='store_true', help='if save model')
-    args = parser.parse_args()
-
-    torch_version = float('.'.join(torch.__version__.split('.')[:2]))
-    args.torch_version = torch_version
-    main(args)
+    ## Prepare training_args
+    pipeline_name = "pruner"
+    PipelineArguments = AutoArguments.get_pipeline_args_class(pipeline_name)
+    parser = HfArgumentParser((ModelArguments, DatasetArguments, PipelineArguments))
+    model_args, data_args, pipeline_args = parser.parse_args_into_dataclasses()
+    main(model_args, data_args, pipeline_args)

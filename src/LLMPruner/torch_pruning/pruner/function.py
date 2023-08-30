@@ -156,7 +156,6 @@ class LinearPruner(BasePruningFunc):
                 if layer.bias is not None:
                     layer.bias = torch.nn.Parameter(layer.bias.data.detach()[keep_idxs])
             deepspeed.zero.Init(layer)
-            print('Is zero3 param or not',hasattr(layer.weight, 'ds_id'))
             return layer
         else:
             keep_idxs = list(set(range(layer.out_features)) - set(idxs))
@@ -177,7 +176,6 @@ class LinearPruner(BasePruningFunc):
                 layer.in_features = layer.in_features-len(idxs)
                 layer.weight = torch.nn.Parameter(layer.weight.data.detach()[:, keep_idxs])
             deepspeed.zero.Init(layer)
-            print('Is zero3 param or not',hasattr(layer.weight, 'ds_id'))
             return layer
         else:
             keep_idxs = list(set(range(layer.in_features)) - set(idxs))
