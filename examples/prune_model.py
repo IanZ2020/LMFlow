@@ -25,6 +25,7 @@ from lmflow.args import (
     AutoArguments,
     DatasetArguments
 )
+from copy import deepcopy
 from lmflow import save_zero3_model
 import LLMPruner.torch_pruning as tp 
 from LLMPruner.pruner import hf_llama_pruner as llama_pruner
@@ -72,17 +73,22 @@ def acc_grad(model):
 def average_gradients(model):
     size = float(dist.get_world_size())
     for param in model.parameters():
-        param.offload_grad = param.offload_grad.to(dist.get_rank())
-        dist.all_reduce(param.offload_grad.data, op=dist.ReduceOp.SUM)
-        param.offload_grad = param.offload_grad.to('cpu')
-        param.acc_grad = param.acc_grad.to(dist.get_rank())
-        dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
-        param.acc_grad = param.acc_grad.to('cpu')
-        # param.grad.data /= size
-        # if hasattr(param, 'acc_grad'):
-        #     param.acc_grad += (param.grad * param.grad).detach().to('cpu')
-        # else:
-        #     param.acc_grad = (param.grad * param.grad).detach().to('cpu')
+        param.grad_square = (param.grad * param.grad).detach()
+        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+        dist.all_reduce(param.grad_square.data, op=dist.ReduceOp.SUM)
+
+        if hasattr(param, 'offload_grad'):
+            param.offload_grad += param.grad.data.detach().to('cpu')
+        else:
+            param.offload_grad = param.grad.data.detach().to('cpu')
+        if hasattr(param, 'acc_grad'):
+            param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
+        else:
+            param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
+
+        param.grad_square = None
+        param.grad = None
+        torch.cuda.empty_cache()
 
 def set_random_seed(seed):
     random.seed(seed)
@@ -281,9 +287,7 @@ def main(model_args, data_args, args):
                     loss = ds_engine.module(batch_input, labels=batch_input).loss
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
-                    acc_grad(model)
-                    
-                average_gradients(model)
+                    average_gradients(model)
                 del loss.grad
                     
             pruner.step()
