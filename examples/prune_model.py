@@ -56,11 +56,24 @@ try:
 except:
     pass
 
+def acc_grad(model):
+    for param in model.parameters():
+        if hasattr(param, 'offload_grad'):
+            param.offload_grad += param.grad.data.detach().to('cpu')
+        else:
+            param.offload_grad = param.grad.data.detach().to('cpu')
+        if hasattr(param, 'acc_grad'):
+            param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
+        else:
+            param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
+        param.grad = None
+        torch.cuda.empty_cache()
+
 def average_gradients(model):
     size = float(dist.get_world_size())
     for param in model.parameters():
-        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-    print(list(model.parameters())[0].grad.sum())
+        dist.all_reduce(param.offload_grad.data, op=dist.ReduceOp.SUM)
+        dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
         # param.grad.data /= size
         # if hasattr(param, 'acc_grad'):
         #     param.acc_grad += (param.grad * param.grad).detach().to('cpu')
@@ -265,7 +278,7 @@ def main(model_args, data_args, args):
                     loss = ds_engine.module(batch_input, labels=batch_input).loss
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
-                    # ds_engine.backward(loss)
+                    
                 average_gradients(model)
                 del loss.grad
                     
@@ -329,6 +342,7 @@ def main(model_args, data_args, args):
                 loss = model(example_prompts, labels=example_prompts).loss
                 logger.log("Loss = {}".format(loss))
                 loss.backward()
+                acc_grad(model)
 
             pruner.step()
 

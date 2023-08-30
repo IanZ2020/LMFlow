@@ -258,40 +258,46 @@ class TaylorImportance(tp.importance.Importance):
                     if is_deepspeed_zero3_enabled():
                         import deepspeed
                         with deepspeed.zero.GatheredParameters([sub_layer.weight]):
-                            salience[sub_layer] = sub_layer.weight * sub_layer.weight.grad
+                            weight = layer.weight.data.detach().to('cpu')
+                            salience[sub_layer] = weight * sub_layer.weight.offload_grad
 
                             if self.taylor in ['param_second']:
-                                salience[sub_layer] = sub_layer.weight * (sub_layer.weight.grad * sub_layer.weight.grad) * sub_layer.weight
+                                salience[sub_layer] = weight * sub_layer.weight.acc_grad * weight
                             elif self.taylor in ['param_mix']: 
-                                salience[sub_layer] = -salience + 0.5 * sub_layer.weight * (sub_layer.weight.grad * sub_layer.weight.grad) * sub_layer.weight
+                                salience[sub_layer] = -salience + 0.5 * weight * sub_layer.weight.acc_grad * weight
                     else:
-                        salience[sub_layer] = sub_layer.weight * sub_layer.weight.grad
+                        weight = layer.weight.data.detach().to('cpu')
+                        salience[sub_layer] = weight * sub_layer.weight.offload_grad
 
                         if self.taylor in ['param_second']:
-                            salience[sub_layer] = sub_layer.weight * (sub_layer.weight.grad * sub_layer.weight.grad) * sub_layer.weight
+                            salience[sub_layer] = weight * sub_layer.weight.acc_grad * weight
                         elif self.taylor in ['param_mix']: 
-                            salience[sub_layer] = -salience + 0.5 * sub_layer.weight * (sub_layer.weight.grad * sub_layer.weight.grad) * sub_layer.weight   
+                            salience[sub_layer] = -salience + 0.5 * weight * sub_layer.weight.acc_grad * weight
             else:
                 if is_deepspeed_zero3_enabled():
                     import deepspeed
                     with deepspeed.zero.GatheredParameters([layer.weight]):
+                        weight = layer.weight.data.detach().to('cpu')
                         if self.taylor in ['param_first']:
-                            salience = layer.weight * layer.weight.grad
-                            layer.weight.grad = None
-                            torch.cuda.empty_cache()
+                            salience = weight * layer.weight.offload_grad
                         elif self.taylor in ['param_second']:
-                            salience = layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
+                            salience = weight * layer.weight.acc_grad * weight
                         elif self.taylor in ['param_mix']: 
-                            salience = layer.weight * layer.weight.grad - 0.5 * layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
+                            salience = weight * layer.weight.grad - 0.5 * weight * layer.weight.acc_grad * weight
+                        layer.weight.offload_grad = None
+                        layer.weight.acc_grad = None
+                        torch.cuda.empty_cache()
                 else:
+                    weight = layer.weight.data.detach().to('cpu')
                     if self.taylor in ['param_first']:
-                            salience = layer.weight * layer.weight.grad
-                            layer.weight.grad = None
-                            torch.cuda.empty_cache()
+                        salience = weight * layer.weight.offload_grad
                     elif self.taylor in ['param_second']:
-                        salience = layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
+                        salience = weight * layer.weight.acc_grad * weight
                     elif self.taylor in ['param_mix']: 
-                        salience = layer.weight * layer.weight.grad - 0.5 * layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
+                        salience = weight * layer.weight.grad - 0.5 * weight * layer.weight.acc_grad * weight
+                    layer.weight.offload_grad = None
+                    layer.weight.acc_grad = None
+                    torch.cuda.empty_cache()
                     
             # Linear out_channels
             if prune_fn in [tp.prune_linear_out_channels, hf_linear_pruner.prune_out_channels]:
