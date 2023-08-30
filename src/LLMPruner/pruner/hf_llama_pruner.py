@@ -277,24 +277,24 @@ class TaylorImportance(tp.importance.Importance):
                 if is_deepspeed_zero3_enabled():
                     import deepspeed
                     with deepspeed.zero.GatheredParameters([layer.weight]):
-                        weight = layer.weight.data.detach().to('cpu')
+                        weight = layer.weight.data.detach().to(device = 'cpu', dtype = torch.float32)
                         if self.taylor in ['param_first']:
-                            salience = weight * layer.weight.offload_grad
+                            salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32)
                         elif self.taylor in ['param_second']:
-                            salience = weight * layer.weight.acc_grad * weight
+                            salience = weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
                         elif self.taylor in ['param_mix']: 
-                            salience = weight * layer.weight.offload_grad - 0.5 * weight * layer.weight.acc_grad * weight
+                            salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32) - 0.5 * weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
                         layer.weight.offload_grad = None
                         layer.weight.acc_grad = None
                         torch.cuda.empty_cache()
                 else:
-                    weight = layer.weight.data.detach().to('cpu')
+                    weight = layer.weight.data.detach().to(device = 'cpu', dtype = torch.float32)
                     if self.taylor in ['param_first']:
-                        salience = weight * layer.weight.offload_grad
+                        salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32)
                     elif self.taylor in ['param_second']:
-                        salience = weight * layer.weight.acc_grad * weight
+                        salience = weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
                     elif self.taylor in ['param_mix']: 
-                        salience = weight * layer.weight.offload_grad - 0.5 * weight * layer.weight.acc_grad * weight
+                        salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32) - 0.5 * weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
                     layer.weight.offload_grad = None
                     layer.weight.acc_grad = None
                     torch.cuda.empty_cache()
