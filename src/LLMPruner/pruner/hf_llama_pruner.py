@@ -280,7 +280,7 @@ class TaylorImportance(tp.importance.Importance):
                             layer.weight.grad = None
                             torch.cuda.empty_cache()
                         elif self.taylor in ['param_second']:
-                            salience = layer.weight * layer.weight.acc_grad * layer.weight
+                            salience = layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
                         elif self.taylor in ['param_mix']: 
                             salience = layer.weight * layer.weight.grad - 0.5 * layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
                 else:
@@ -289,7 +289,7 @@ class TaylorImportance(tp.importance.Importance):
                             layer.weight.grad = None
                             torch.cuda.empty_cache()
                     elif self.taylor in ['param_second']:
-                        salience = layer.weight * layer.weight.acc_grad * layer.weight
+                        salience = layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
                     elif self.taylor in ['param_mix']: 
                         salience = layer.weight * layer.weight.grad - 0.5 * layer.weight * (layer.weight.grad * layer.weight.grad) * layer.weight
                     
