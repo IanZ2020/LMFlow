@@ -238,5 +238,5 @@ class PrunedLlamaConfig(PretrainedConfig):
     def from_llama_model(self, model):
         self.from_llama_config(model.config)
         for i, layer in enumerate(model.base_model.layers):
-            self.num_attention_heads[i] = layer.self_attn.num_heads
+            self.num_attention_heads[i] = layer.self_attn.q_proj.out_features // self.head_dim
             self.intermediate_size[i] = layer.mlp.gate_proj.out_features

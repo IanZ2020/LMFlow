@@ -7,9 +7,9 @@ import copy
 import random
 import argparse
 from typing import Tuple
-
-# import deepspeed
-
+import deepspeed
+import torch.distributed as dist
+from transformers.deepspeed import HfDeepSpeedConfig,is_deepspeed_zero3_enabled, deepspeed_config
 import torch
 import numpy as np
 from transformers import LlamaTokenizer
@@ -19,6 +19,7 @@ from LLMPruner.models.hf_llama import (
     PrunedLlamaForCausalLM, 
     PrunedLlamaConfig
 )
+from lmflow import save_zero3_model
 import LLMPruner.torch_pruning as tp 
 from LLMPruner.pruner import hf_llama_pruner as llama_pruner
 from LLMPruner.utils.logger import LoggerWithDepth
@@ -49,6 +50,12 @@ try:
 except:
     pass
 
+def average_gradients(model):
+    size = float(dist.get_world_size())
+    for param in model.parameters():
+        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+        # param.grad.data /= size
+
 def set_random_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -57,12 +64,22 @@ def set_random_seed(seed):
     
 def main(args):
     set_random_seed(args.seed)
+    
+    local_rank = int(os.getenv("LOCAL_RANK", "0"))
+    world_size = int(os.getenv("WORLD_SIZE", "1"))
+    torch.cuda.set_device(local_rank)
+
+    with open (args.deepspeed, "r") as f:
+        ds_config = json.load(f)
+    dschf = HfDeepSpeedConfig(ds_config)
+    deepspeed.init_distributed()
 
     logger = LoggerWithDepth(
         env_name="{}".format(args.save_ckpt_log_name), 
         config=args.__dict__,
         root_dir='prune_log',
-        setup_sublogger=True
+        setup_sublogger=True,
+        local_rank = local_rank
     )
 
     tokenizer = LlamaTokenizer.from_pretrained(args.base_model)
@@ -135,15 +152,13 @@ def main(args):
     else:
         model = LlamaForCausalLM.from_pretrained(
             args.base_model,
-            low_cpu_mem_usage=True if args.torch_version >=1.9 else False,
+            torch_dtype = torch_dtype,
             config = config
         )
-
-    # deepspeed initialization
-    # if args.device == "gpu":
-    #     deepspeed.init_distributed()
-    #     ds_engine = deepspeed.initialize(model=model, config_params=args.ds_config)[0]
-    #     ds_engine.module.eval()
+    model.to(device = local_rank)
+    ds_engine = deepspeed.initialize(model=model, config_params=ds_config)[0]
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
 
     if args.test_before_train:
         logger.log("\n==================Generation Results before Pruning================\n")
@@ -172,13 +187,17 @@ def main(args):
 
     for param in model.parameters():
         param.requires_grad_(True)
-    before_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    if is_deepspeed_zero3_enabled():
+        before_pruning_parameters = sum(p.ds_numel for p in model.parameters() if p.requires_grad)
+    else:
+        before_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print('before_pruning_parameters', before_pruning_parameters)
     
     forward_prompts = torch.tensor([
         [    1,   306,  4658,   278,  6593,   310,  2834,   338],
         [    1,  3439, 17632,  1925, 29892,   278,  6368,   310],
-    ]).to(args.device) # Only for building the dependency graph. Any input will be fine since the computation result are not taken into consideration.
-
+    ]).to(device = local_rank) # Only for building the dependency graph. Any input will be fine since the computation result are not taken into consideration.
     if pruner_type == 'random':
         imp = tp.importance.RandomImportance()
     elif pruner_type == 'l1':
@@ -215,24 +234,29 @@ def main(args):
         logger.log("Pruning MLP Layer = {}".format(list(range(args.block_mlp_layer_start, args.block_mlp_layer_end))))
 
         pruner = tp.pruner.MetaPruner(
-            model,
+            ds_engine.module,
             forward_prompts,
             **kwargs
         )
         model.zero_grad()
-
+        ds_engine.module.train()
         logger.log("Start Pruning")
         for i in range(args.iterative_steps):
 
             if pruner_type in ['taylor']:
-                example_prompts = get_examples('bookcorpus', tokenizer, args.num_examples, seq_len = args.block_size).to(args.device)
+                example_prompts = get_examples('redpajama', tokenizer, args.num_examples, seq_len = args.block_size).to(device = local_rank)
                 batch_num = args.num_examples // args.batch_size
-                example_prompts = example_prompts[0: args.batch_size * batch_num].view(args.num_of_batch, args.batch_size, args.block_size)
+                batch_num_per_device = batch_num // world_size
+                batch_num = batch_num_per_device * world_size
+
+                example_prompts = example_prompts[0: args.batch_size * batch_num].view(batch_num, args.batch_size, args.block_size)
+                current_batch = example_prompts[local_rank*batch_num_per_device : (local_rank+1)*batch_num_per_device]
+
                 logger.log("Start Backwarding in iterative steps = {}...".format(i))
                 if args.taylor in ['param_mix', 'param_second']:
-                    for j in range(batch_num):
-                        batch_input = example_prompts[j]
-                        loss = model(batch_input, labels=batch_input).loss
+                    for j in range(batch_num_per_device):
+                        batch_input = current_batch[j]
+                        loss = ds_engine.module(batch_input, labels=batch_input).loss
                         logger.log(f'batch{j}, loss: {loss}')
                         loss.backward()
                         for module_param in model.parameters():
@@ -243,26 +267,38 @@ def main(args):
                                 module_param.acc_grad = copy.deepcopy(module_param.grad)
                         model.zero_grad()
                         del loss.grad
-                    
-                loss = model(example_prompts, labels=example_prompts).loss
-                logger.log("Loss = {}".format(loss))
-                loss.backward()
-
+                for j in range(batch_num_per_device):
+                    batch_input = current_batch[j]
+                    loss = ds_engine.module(batch_input, labels=batch_input).loss
+                    logger.log(f'batch{j}, loss: {loss}')
+                    loss.backward()
+                    # ds_engine.backward(loss)
+                    average_gradients(model)
+                    del loss.grad
             pruner.step()
 
-            after_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            if is_deepspeed_zero3_enabled():
+                after_pruning_parameters = 0
+                for name,p in model.named_parameters():
+                    if name == 'model.embed_tokens.weight': 
+                        after_pruning_parameters += p.numel()
+                    else:
+                        with deepspeed.zero.GatheredParameters(p):
+                            if p.requires_grad:
+                                after_pruning_parameters += p.numel()
+            else:
+                after_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
             logger.log("After Iter {}/{}, #parameters: {}".format(i+1, args.iterative_steps, after_pruning_parameters))
         
             # modify inferece-related attributes
             for layer in model.model.layers:
-                layer.self_attn.num_heads = layer.self_attn.q_proj.weight.data.shape[0] // layer.self_attn.head_dim
+                layer.self_attn.num_heads = layer.self_attn.q_proj.out_features // layer.self_attn.head_dim
 
         # Clean the gradient in the model
         model.zero_grad()
         for name, module in model.named_parameters():
             if 'weight' in name:
                 module.grad = None
-
         del pruner
 
     elif args.channel_wise:
@@ -323,19 +359,26 @@ def main(args):
 
     else:
         raise NotImplementedError
+    
     logger.log("#Param before: {}, #Param after: {}, Ratio = {:.4f}%".format(before_pruning_parameters, after_pruning_parameters,  100.0*after_pruning_parameters/before_pruning_parameters))
     
     gc.collect()
     torch.cuda.empty_cache()
 
-    if args.save_model:
-        model.half()
-        config = PrunedLlamaConfig()
-        config.from_llama_model(model)
-        model.config = config
-        model.save_pretrained(logger.best_checkpoint_path)
-
-        tokenizer.save_pretrained(logger.best_checkpoint_path)
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        if args.save_model:
+            print('saving model')
+            model.half()
+            config = PrunedLlamaConfig()
+            config.from_llama_model(model)
+            print('Get config')
+            model.config = config
+            if is_deepspeed_zero3_enabled():
+                save_zero3_model.save_zero3_model(model, logger.best_checkpoint_path)
+            else:
+                model.save_pretrained(logger.best_checkpoint_path)
+            print('done')
+            tokenizer.save_pretrained(logger.best_checkpoint_path)
     if args.eval_device != "cpu":
         model.half()
     model.to(args.eval_device)
@@ -347,12 +390,12 @@ def main(args):
     if args.test_after_train:
         logger.log("\n==================Generation Results After Pruning================\n")
         
-        model.eval()
+        ds_engine.module.eval()
         with torch.no_grad():
             for prompt in prompts:
                 input_ids = tokenizer(prompt, return_tensors="pt")['input_ids'].to(args.eval_device)
 
-                generation_output = model.generate(
+                generation_output = ds_engine.module.generate(
                     input_ids=input_ids,
                     do_sample=True,
                     top_k=50,
@@ -365,7 +408,7 @@ def main(args):
                 logger.log(result)
         
         logger.log("\n==================Finish================\n")
-    
+        
     ppl = PPLMetric(model, tokenizer, ['wikitext2', 'ptb'], args.max_seq_len, device=args.eval_device)
     logger.log("PPL after pruning: {}".format(ppl))
     logger.log("Memory Requirement: {} MiB\n".format(torch.cuda.memory_allocated()/1024/1024))
@@ -375,12 +418,14 @@ if __name__ == "__main__":
 
     # argument for parsing
     parser.add_argument('--base_model', type=str, default="decapoda-research/llama-7b-hf", help='base model name')
-    parser.add_argument('--batch_size', type=int, default=4, help='deepspeed config')
+    parser.add_argument('--batch_size', type=int, default=4, help='batch_size')
     parser.add_argument('--block_size', type=int, default=1024, help='deepspeed config')
-    parser.add_argument('--ds_config', type=str, default="configs/ds_config_zero2.json", help='deepspeed config')
+    parser.add_argument('--deepspeed', type=str, default="configs/ds_config_zero2.json", help='deepspeed config')
+    parser.add_argument('--local_rank', type=int, default=0, help='deepspeed local rank')
     parser.add_argument('--torch_dtype', type=str, default="float16", help='torch dtype')
     parser.add_argument('--is_base_model_pruned', action='store_true', help='whether the base model is pruned')
     parser.add_argument('--use_flash_attention', action='store_true', help='whether to use flash attention')
+    parser.add_argument('--gradient_checkpointing', action='store_true', help='whether to use gradient checkpointing')
     parser.add_argument('--save_ckpt_log_name', type=str, default="llama_prune", help='the path for save the checkpoint and the log. The final path would be log/{your_name_here}_{pruner_type}_{pruning_ratio}')
     parser.add_argument('--pruning_ratio', type=float, default=0.5, help='pruning ratio')
     parser.add_argument('--pruner_type', type=str, default='l2', help='pruner type')

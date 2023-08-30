@@ -8,7 +8,7 @@ from copy import deepcopy
 import random
 from functools import reduce
 from operator import mul
-
+from transformers.deepspeed import is_deepspeed_zero3_enabled
 from typing import Callable, Sequence, Tuple, Dict
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
@@ -255,19 +255,38 @@ class TaylorImportance(tp.importance.Importance):
             if prune_fn in [hf_attention_pruner.prune_out_channels]:
                 salience = {}
                 for sub_layer in [layer.o_proj, layer.q_proj, layer.k_proj, layer.v_proj]:
-                    salience[sub_layer] = sub_layer.weight * sub_layer.weight.grad
+                    if is_deepspeed_zero3_enabled():
+                        import deepspeed
+                        with deepspeed.zero.GatheredParameters([sub_layer.weight]):
+                            salience[sub_layer] = sub_layer.weight * sub_layer.weight.grad
+
+                            if self.taylor in ['param_second']:
+                                salience[sub_layer] = sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight
+                            elif self.taylor in ['param_mix']: 
+                                salience[sub_layer] = -salience + 0.5 * sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight
+                    else:
+                        salience[sub_layer] = sub_layer.weight * sub_layer.weight.grad
+
+                        if self.taylor in ['param_second']:
+                            salience[sub_layer] = sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight
+                        elif self.taylor in ['param_mix']: 
+                            salience[sub_layer] = -salience + 0.5 * sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight   
+            else:
+                if is_deepspeed_zero3_enabled():
+                    import deepspeed
+                    with deepspeed.zero.GatheredParameters([layer.weight], modifier_rank=0):
+                        salience = layer.weight * layer.weight.grad
+                        if self.taylor in ['param_second']:
+                            salience = layer.weight * layer.weight.acc_grad * layer.weight
+                        elif self.taylor in ['param_mix']: 
+                            salience = salience - 0.5 * layer.weight * layer.weight.acc_grad * layer.weight
+                else:
+                    salience = layer.weight * layer.weight.grad
 
                     if self.taylor in ['param_second']:
-                        salience[sub_layer] = sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight
+                        salience = layer.weight * layer.weight.acc_grad * layer.weight
                     elif self.taylor in ['param_mix']: 
-                        salience[sub_layer] = -salience + 0.5 * sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight   
-            else:
-                salience = layer.weight * layer.weight.grad
-
-                if self.taylor in ['param_second']:
-                    salience = layer.weight * layer.weight.acc_grad * layer.weight
-                elif self.taylor in ['param_mix']: 
-                    salience = salience - 0.5 * layer.weight * layer.weight.acc_grad * layer.weight
+                        salience = salience - 0.5 * layer.weight * layer.weight.acc_grad * layer.weight
                     
             # Linear out_channels
             if prune_fn in [tp.prune_linear_out_channels, hf_linear_pruner.prune_out_channels]:

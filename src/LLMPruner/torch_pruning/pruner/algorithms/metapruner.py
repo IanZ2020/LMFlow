@@ -5,7 +5,7 @@ import typing
 from .scheduler import linear_scheduler
 from ..import function
 from ... import ops, dependency
-
+from transformers.deepspeed import is_deepspeed_zero3_enabled
 
 class MetaPruner:
     """
@@ -85,7 +85,6 @@ class MetaPruner:
             unwrapped_parameters=unwrapped_parameters,
             customized_pruners=customized_pruners,
         )
-
         self.ignored_layers = []
         if ignored_layers:
             for layer in ignored_layers:
@@ -302,7 +301,7 @@ class MetaPruner:
 
         imp = torch.cat([local_imp[-1]
                         for local_imp in global_importance], dim=0)
-        print(imp.shape, len(global_importance))
+        
         target_sparsity = self.per_step_ch_sparsity[self.current_step]
         n_pruned = len(imp) - int(
             self.initial_total_channels *

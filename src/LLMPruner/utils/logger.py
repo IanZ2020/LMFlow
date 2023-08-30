@@ -6,7 +6,7 @@ import logging
 
 
 class LoggerWithDepth():
-    def __init__(self, env_name, config, root_dir = 'runtime_log', overwrite = True, setup_sublogger = True):
+    def __init__(self, env_name, config, local_rank=0, root_dir = 'runtime_log', overwrite = True, setup_sublogger = True):
         if os.path.exists(os.path.join(root_dir, env_name)) and not overwrite:
             raise Exception("Logging Directory {} Has Already Exists. Change to another name or set OVERWRITE to True".format(os.path.join(root_dir, env_name)))
         
@@ -17,7 +17,7 @@ class LoggerWithDepth():
 
         self.format = logging.Formatter("%(asctime)s;%(levelname)s;%(message)s",
                                         "%Y-%m-%d %H:%M:%S")
-
+        self.local_rank = local_rank
         if not os.path.exists(root_dir):
             os.mkdir(root_dir)
         if not os.path.exists(self.log_dir):
@@ -29,7 +29,7 @@ class LoggerWithDepth():
 
         if setup_sublogger:
             sub_name = time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime())
-            self.setup_sublogger(sub_name, config)
+            self.setup_sublogger(sub_name+f'rank_{self.local_rank}', config)
 
     def setup_sublogger(self, sub_name, sub_config):
         self.sub_dir = os.path.join(self.log_dir, sub_name)

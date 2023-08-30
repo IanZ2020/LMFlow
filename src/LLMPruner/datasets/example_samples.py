@@ -1,9 +1,11 @@
 import random
 import numpy as np
+from itertools import chain
 import torch
-
+import json
 from datasets import load_dataset
-from torch.utils.data.dataset import Dataset
+from lmflow.datasets.dataset import Dataset
+from lmflow.args import DatasetArguments
 
 def get_c4(tokenizer, n_samples, seq_len):
     traindata = load_dataset(
@@ -39,10 +41,43 @@ def get_bookcorpus(tokenizer, n_samples, seq_len):
         tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
     return torch.cat(tokenized_samples, dim=0 )
 
+def get_redpajama(tokenizer, n_samples, seq_len):
+    dataset_path = 'data/redpajama_mini_formatted'
+    block_size = seq_len
+    data_args = DatasetArguments(dataset_path=dataset_path, block_size=block_size, max_train_samples=n_samples)
+    dataset = Dataset(data_args)
+    traindata = dataset.get_backend_dataset()
+
+    tokenized_samples, history = [], []
+    for _ in range(n_samples):
+        group_text = []
+        group_len = 0
+        while True:
+            i = random.randint(0, len(traindata) - 1)
+            tokenized_sample = tokenizer(traindata[i]['text'], return_tensors='pt')
+
+            if i not in history:
+                sample_len = tokenized_sample.input_ids.shape[1]
+                group_len += sample_len
+                history.append(i)
+                group_text.append(tokenized_sample.input_ids.squeeze())
+            
+            if group_len >= seq_len:
+                break
+        group_text = torch.cat(group_text,dim=0)
+        i = random.randint(0, group_len - seq_len)
+        tokenized_samples.append(group_text[i:i+seq_len].unsqueeze(dim = 0))
+    return torch.cat(tokenized_samples, dim=0)
+
+
+
+
 def get_examples(dataset, tokenizer, n_samples, seq_len = 128):
     if dataset == 'c4':
         return get_c4(tokenizer, n_samples, seq_len)
     elif dataset == 'bookcorpus':
         return get_bookcorpus(tokenizer, n_samples, seq_len)
+    elif dataset == 'redpajama':
+        return get_redpajama(tokenizer, n_samples, seq_len)
     else:
         raise NotImplementedError
