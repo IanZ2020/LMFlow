@@ -337,7 +337,7 @@ def main(model_args, data_args, args):
                 loss = model(example_prompts, labels=example_prompts).loss
                 logger.log("Loss = {}".format(loss))
                 loss.backward()
-                acc_grad(model)
+                average_gradients(model)
 
             pruner.step()
 
