@@ -59,23 +59,36 @@ except:
 
 def average_gradients(model):
     size = float(dist.get_world_size())
+    grad_tensors = []
     for param in model.parameters():
-        param.grad_square = (param.grad * param.grad).detach()
-        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-        dist.all_reduce(param.grad_square.data, op=dist.ReduceOp.SUM)
-
-        if hasattr(param, 'offload_grad'):
-            param.offload_grad += param.grad.data.detach().to('cpu')
-        else:
-            param.offload_grad = param.grad.data.detach().to('cpu')
-        if hasattr(param, 'acc_grad'):
-            param.acc_grad += param.grad_square.data.detach().to('cpu')
-        else:
-            param.acc_grad = param.grad_square.data.detach().to('cpu')
-
-        param.grad_square = None
+        grad_tensors.append(param.grad.data.clone().to('cpu'))
+        if not hasattr(param, 'offload_shape'):
+            param.offload_shape = param.grad.data.size()
+            param.offload_numel = param.offload_shape.numel()
         param.grad = None
-        torch.cuda.empty_cache()
+    torch.cuda.empty_cache()
+
+    global_grads = torch.cat([grad_tensor.view(-1) for grad_tensor in grad_tensors]).to(dist.get_rank())
+    dist.all_reduce(global_grads, op=dist.ReduceOp.SUM)
+    # global_grads /= size
+
+    offset = 0
+    for param in model.parameters():
+        numel = param.offload_numel
+        grad = global_grads[offset:offset+numel].view(param.offload_shape).to('cpu')
+        grad_square = (grad.data * grad.data).detach()
+        if hasattr(param, 'offload_grad'):
+            param.offload_grad += grad.data.detach().to('cpu')
+        else:
+            param.offload_grad = grad.data.detach().to('cpu')
+        if hasattr(param, 'acc_grad'):
+            param.acc_grad += grad_square.data.detach().to('cpu')
+        else:
+            param.acc_grad = grad_square.data.detach().to('cpu')
+        offset += numel
+
+    del global_grads
+    torch.cuda.empty_cache()
 
 def set_random_seed(seed):
     random.seed(seed)
