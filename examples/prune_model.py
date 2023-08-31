@@ -57,6 +57,19 @@ try:
 except:
     pass
 
+def acc_grad(model):
+    for param in model.parameters():
+        if hasattr(param, 'offload_grad'):
+            param.offload_grad += param.grad.data.detach().to('cpu')
+        else:
+            param.offload_grad = param.grad.data.detach().to('cpu')
+        if hasattr(param, 'acc_grad'):
+            param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
+        else:
+            param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
+        param.grad = None
+        torch.cuda.empty_cache()
+
 def average_gradients(model):
     size = float(dist.get_world_size())
     for param in model.parameters():
@@ -69,9 +82,9 @@ def average_gradients(model):
         else:
             param.offload_grad = param.grad.data.detach().to('cpu')
         if hasattr(param, 'acc_grad'):
-            param.acc_grad += param.grad_square.data.detach().to('cpu')
+            param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
         else:
-            param.acc_grad = param.grad_square.data.detach().to('cpu')
+            param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
 
         param.grad_square = None
         param.grad = None
