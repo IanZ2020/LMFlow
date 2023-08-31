@@ -20,7 +20,7 @@ class LoggerWithDepth():
         self.local_rank = local_rank
         if not os.path.exists(root_dir):
             os.mkdir(root_dir)
-        if not os.path.exists(self.log_dir):
+        if not os.path.exists(self.log_dir) and local_rank == 0:
             os.mkdir(self.log_dir)
         
         # Save Hyperparameters

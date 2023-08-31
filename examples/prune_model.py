@@ -73,21 +73,13 @@ def acc_grad(model):
 def average_gradients(model):
     size = float(dist.get_world_size())
     for param in model.parameters():
-        param.grad_square = (param.grad * param.grad).detach()
-        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-        dist.all_reduce(param.grad_square.data, op=dist.ReduceOp.SUM)
-
-        if hasattr(param, 'offload_grad'):
-            param.offload_grad += param.grad.data.detach().to('cpu')
-        else:
-            param.offload_grad = param.grad.data.detach().to('cpu')
-        if hasattr(param, 'acc_grad'):
-            param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
-        else:
-            param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
-
-        param.grad_square = None
-        param.grad = None
+        param.offload_grad = param.offload_grad.to(dist.get_rank())
+        dist.all_reduce(param.offload_grad.data, op=dist.ReduceOp.SUM)
+        param.offload_grad = param.offload_grad.to('cpu')
+        torch.cuda.empty_cache()
+        param.acc_grad = param.acc_grad.to(dist.get_rank())
+        dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
+        param.acc_grad = param.acc_grad.to('cpu')
         torch.cuda.empty_cache()
 
 def set_random_seed(seed):
@@ -287,7 +279,8 @@ def main(model_args, data_args, args):
                     loss = ds_engine.module(batch_input, labels=batch_input).loss
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
-                    average_gradients(model)
+                    acc_grad(model)
+                average_gradients(model)
                 del loss.grad
                     
             pruner.step()
@@ -351,7 +344,7 @@ def main(model_args, data_args, args):
                 logger.log("Loss = {}".format(loss))
                 loss.backward()
                 acc_grad(model)
-
+            average_gradients(model)
             pruner.step()
 
             after_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
