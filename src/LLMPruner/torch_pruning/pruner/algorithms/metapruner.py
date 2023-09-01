@@ -302,7 +302,7 @@ class MetaPruner:
 
         imp = torch.cat([local_imp[-1]
                         for local_imp in global_importance], dim=0)
-        print(imp.shape, len(global_importance))
+        
         target_sparsity = self.per_step_ch_sparsity[self.current_step]
         n_pruned = len(imp) - int(
             self.initial_total_channels *
@@ -315,6 +315,8 @@ class MetaPruner:
         
         # global pruning through thresholding
         thres = topk_imp[-1]
+
+        print(n_pruned, target_sparsity, self.initial_total_channels, len(global_importance), len(imp),thres)
         for group, ch_groups, consecutive_groups, imp in global_importance:
             module = group[0][0].target.module
             pruning_fn = group[0][0].handler

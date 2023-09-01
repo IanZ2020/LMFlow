@@ -8,14 +8,11 @@ import random
 import argparse
 from typing import Tuple
 
-# import deepspeed
-
 import torch
 import numpy as np
-from transformers import LlamaTokenizer
+from transformers import LlamaTokenizer, GenerationConfig, LlamaConfig
 from LLMPruner.models.hf_llama.modeling_llama import LlamaForCausalLM, LlamaRMSNorm, LlamaAttention, LlamaMLP
 from LLMPruner.models.hf_llama import (
-    LlamaConfig,
     PrunedLlamaForCausalLM, 
     PrunedLlamaConfig
 )
@@ -25,29 +22,6 @@ from LLMPruner.utils.logger import LoggerWithDepth
 from LLMPruner.evaluator.ppl import PPLMetric
 from LLMPruner.datasets.example_samples import get_examples
 from LLMPruner.templates.prompts import prompts
-
-MODELS_SUPPORT_FLASH_ATTENTION = [
-    "PrunedLlamaForCausalLM",
-    "LlamaForCausalLM",
-    "GPTNeoForCausalLM",
-    "GPT2ForCausalLM",
-    "BloomForCausalLM"
-]
-
-GPU_SUPPORT_FLASH_ATTENTION = {
-    "A100": ["PrunedLlamaForCausalLM","LlamaForCausalLM", "GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"],
-    "A40": ["GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"]
-}
-
-try:
-    import flash_attn
-    if int(flash_attn.__version__.split(".")[0]) == 2:
-        GPU_SUPPORT_FLASH_ATTENTION = {
-            "A100": ["PrunedLlamaForCausalLM","LlamaForCausalLM", "GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"],
-            "A40": ["PrunedLlamaForCausalLM","LlamaForCausalLM","GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"]
-        }
-except:
-    pass
 
 def set_random_seed(seed):
     random.seed(seed)
@@ -66,84 +40,13 @@ def main(args):
     )
 
     tokenizer = LlamaTokenizer.from_pretrained(args.base_model)
-
-    torch_dtype = (
-            args.torch_dtype
-            if args.torch_dtype in ["auto", None]
-            else getattr(torch, args.torch_dtype)
+    model = LlamaForCausalLM.from_pretrained(
+        args.base_model,
+        low_cpu_mem_usage=True if args.torch_version >=1.9 else False,
     )
-
-    if args.is_base_model_pruned:
-        config = PrunedLlamaConfig.from_pretrained(args.base_model)
-    else: 
-        config = LlamaConfig.from_pretrained(args.base_model)
-
-    supported_gpu_device = None
-    for gpu in GPU_SUPPORT_FLASH_ATTENTION:
-        if gpu in torch.cuda.get_device_name():
-            supported_gpu_device = gpu
-    if args.use_flash_attention:
-        if not any(model_supported in config.architectures
-                    for model_supported in MODELS_SUPPORT_FLASH_ATTENTION):
-            logger.warning(
-                f"Model \"{config.architectures}\" does not support"
-                " flash attention, use normal attention layer instead"
-            )
-        elif supported_gpu_device is None:
-            logger.warning(
-                f"Your decice \"{torch.cuda.get_device_name()}\""
-                " does not support flash attention, it will"
-                " automatically use normal attention layer"
-            )
-        else:
-            
-            supported_models = GPU_SUPPORT_FLASH_ATTENTION[supported_gpu_device]
-            
-            config.use_cache = False
-            if ("LlamaForCausalLM" in config.architectures and "LlamaForCausalLM" in supported_models) or ("PrunedLlamaForCausalLM" in config.architectures and "PrunedLlamaForCausalLM" in supported_models):
-                from lmflow.utils.flash_attention.llama_flash_attention import (
-                    replace_llama_attn_with_flash_attn,
-                )
-                replace_llama_attn_with_flash_attn()
-            elif "GPTNeoForCausalLM" in config.architectures and "GPTNeoForCausalLM" in supported_models:
-                from lmflow.utils.flash_attention.gpt_neo_flash_attention import (
-                    replace_gpt_neo_attn_with_flash_attn,
-                )
-                replace_gpt_neo_attn_with_flash_attn()
-            elif "GPT2ForCausalLM" in config.architectures and "GPT2ForCausalLM" in supported_models:
-                from lmflow.utils.flash_attention.gpt2_flash_attention import (
-                    replace_gpt2_attn_with_flash_attn,
-                )
-                replace_gpt2_attn_with_flash_attn()
-            elif "BloomForCausalLM" in config.architectures and "BloomForCausalLM" in supported_models:
-                from lmflow.utils.flash_attention.bloom_flash_attention import (
-                    replace_bloom_attn_with_flash_attn
-                )
-                replace_bloom_attn_with_flash_attn()
-            else:
-                raise ValueError(
-                    f"Model \"{config.architectures}\" with GPU {supported_gpu_device} does not support"
-                    " flash attention, use normal attention layer instead"
-                )
-
-    if args.is_base_model_pruned:
-        model = PrunedLlamaForCausalLM.from_pretrained(
-            args.base_model,
-            config = config,
-            torch_dtype = torch_dtype
-        )
-    else:
-        model = LlamaForCausalLM.from_pretrained(
-            args.base_model,
-            low_cpu_mem_usage=True if args.torch_version >=1.9 else False,
-            config = config
-        )
-
-    # deepspeed initialization
-    # if args.device == "gpu":
-    #     deepspeed.init_distributed()
-    #     ds_engine = deepspeed.initialize(model=model, config_params=args.ds_config)[0]
-    #     ds_engine.module.eval()
+    if args.device != "cpu":
+        model.half()
+    model.to(args.device)
 
     if args.test_before_train:
         logger.log("\n==================Generation Results before Pruning================\n")
@@ -225,16 +128,15 @@ def main(args):
         for i in range(args.iterative_steps):
 
             if pruner_type in ['taylor']:
-                example_prompts = get_examples('bookcorpus', tokenizer, args.num_examples, seq_len = args.block_size).to(args.device)
-                batch_num = args.num_examples // args.batch_size
-                example_prompts = example_prompts[0: args.batch_size * batch_num].view(args.num_of_batch, args.batch_size, args.block_size)
+                example_prompts = get_examples('bookcorpus', tokenizer, args.num_examples, seq_len = 64).to(args.device)
                 logger.log("Start Backwarding in iterative steps = {}...".format(i))
                 if args.taylor in ['param_mix', 'param_second']:
-                    for j in range(batch_num):
-                        batch_input = example_prompts[j]
+                    for j in range(args.num_examples):
+                        batch_input = example_prompts[j].unsqueeze(0)
                         loss = model(batch_input, labels=batch_input).loss
-                        logger.log(f'batch{j}, loss: {loss}')
+                        logger.log("Loss = {}".format(loss))
                         loss.backward()
+
                         for module_param in model.parameters():
                             module_param.grad = module_param.grad * module_param.grad / args.num_examples
                             if hasattr(module_param, 'acc_grad'):
@@ -375,11 +277,7 @@ if __name__ == "__main__":
 
     # argument for parsing
     parser.add_argument('--base_model', type=str, default="decapoda-research/llama-7b-hf", help='base model name')
-    parser.add_argument('--batch_size', type=int, default=4, help='deepspeed config')
-    parser.add_argument('--block_size', type=int, default=1024, help='deepspeed config')
-    parser.add_argument('--ds_config', type=str, default="configs/ds_config_zero2.json", help='deepspeed config')
-    parser.add_argument('--torch_dtype', type=str, default="float16", help='torch dtype')
-    parser.add_argument('--is_base_model_pruned', action='store_true', help='whether the base model is pruned')
+    parser.add_argument('--is_base_model_pruend', action='store_true', help='whether the base model is pruned')
     parser.add_argument('--use_flash_attention', action='store_true', help='whether to use flash attention')
     parser.add_argument('--save_ckpt_log_name', type=str, default="llama_prune", help='the path for save the checkpoint and the log. The final path would be log/{your_name_here}_{pruner_type}_{pruning_ratio}')
     parser.add_argument('--pruning_ratio', type=float, default=0.5, help='pruning ratio')
