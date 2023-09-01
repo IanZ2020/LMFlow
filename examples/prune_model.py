@@ -265,7 +265,7 @@ def main(model_args, data_args, args):
         for i in range(args.iterative_steps):
 
             if pruner_type in ['taylor']:
-                example_prompts = get_examples('redpajama', tokenizer, args.num_examples, seq_len = args.prune_block_size).to(device = local_rank)
+                example_prompts = get_examples(args.pruning_dataset, tokenizer, args.num_examples, seq_len = args.prune_block_size).to(device = local_rank)
                 batch_num = args.num_examples // args.prune_batch_size
                 batch_num_per_device = batch_num // world_size
                 batch_num = batch_num_per_device * world_size
