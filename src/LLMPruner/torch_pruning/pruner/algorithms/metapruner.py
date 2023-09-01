@@ -5,7 +5,7 @@ import typing
 from .scheduler import linear_scheduler
 from ..import function
 from ... import ops, dependency
-
+from transformers.deepspeed import is_deepspeed_zero3_enabled
 
 class MetaPruner:
     """
@@ -85,7 +85,6 @@ class MetaPruner:
             unwrapped_parameters=unwrapped_parameters,
             customized_pruners=customized_pruners,
         )
-
         self.ignored_layers = []
         if ignored_layers:
             for layer in ignored_layers:
@@ -308,15 +307,16 @@ class MetaPruner:
             self.initial_total_channels *
             (1 - target_sparsity)
         )
-        print(n_pruned, target_sparsity, self.initial_total_channels)
+        
         if n_pruned <= 0:
             return
-        topk_imp, _ = torch.topk(imp, k=n_pruned, largest=False)
+        topk_imp, _ = torch.topk(imp.to(dtype=torch.float32), k=n_pruned, largest=False)
         
         # global pruning through thresholding
         thres = topk_imp[-1]
-
         print(n_pruned, target_sparsity, self.initial_total_channels, len(global_importance), len(imp),thres)
+        torch.save(imp, '/home/zhangyihan/LMFlow/prune_log/imp.pt')
+        torch.save(thres, '/home/zhangyihan/LMFlow/prune_log/thres.pt')
         for group, ch_groups, consecutive_groups, imp in global_importance:
             module = group[0][0].target.module
             pruning_fn = group[0][0].handler

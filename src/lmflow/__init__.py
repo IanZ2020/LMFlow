@@ -5,7 +5,7 @@ __version__ = internal_version
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from lmflow import args, datasets, models, pipeline, utils
+from lmflow import args, datasets, models, pipeline, utils, save_zero3_model
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.27.0.dev0")

@@ -9,6 +9,7 @@ from operator import mul
 
 from abc import ABC, abstractclassmethod, abstractmethod, abstractstaticmethod
 from typing import Callable, Sequence, Tuple, Dict
+from transformers.deepspeed import is_deepspeed_zero3_enabled,deepspeed_config
 
 __all__=[
     'BasePruningFunc',
@@ -144,21 +145,44 @@ class LinearPruner(BasePruningFunc):
     TARGET_MODULES = ops.TORCH_LINEAR
 
     def prune_out_channels(self, layer: nn.Module, idxs: Sequence[int]) -> nn.Module:
-        keep_idxs = list(set(range(layer.out_features)) - set(idxs))
-        keep_idxs.sort()
-        layer.out_features = layer.out_features-len(idxs)
-        layer.weight = torch.nn.Parameter(layer.weight.data[keep_idxs])
-        if layer.bias is not None:
-            layer.bias = torch.nn.Parameter(layer.bias.data[keep_idxs])
-        return layer
+        if is_deepspeed_zero3_enabled():
+            import deepspeed
+            # with deepspeed.zero.Init(config_dict_or_path=deepspeed_config()):
+            with deepspeed.zero.GatheredParameters(layer.weight, modifier_rank=0):
+                keep_idxs = list(set(range(layer.out_features)) - set(idxs))
+                keep_idxs.sort()
+                layer.out_features = layer.out_features-len(idxs)
+                layer.weight = torch.nn.Parameter(layer.weight.data.detach()[keep_idxs])
+                if layer.bias is not None:
+                    layer.bias = torch.nn.Parameter(layer.bias.data.detach()[keep_idxs])
+            deepspeed.zero.Init(layer)
+            return layer
+        else:
+            keep_idxs = list(set(range(layer.out_features)) - set(idxs))
+            keep_idxs.sort()
+            layer.out_features = layer.out_features-len(idxs)
+            layer.weight = torch.nn.Parameter(layer.weight.data.detach()[keep_idxs])
+            if layer.bias is not None:
+                layer.bias = torch.nn.Parameter(layer.bias.data.detach()[keep_idxs])
+            return layer
 
     def prune_in_channels(self, layer: nn.Module, idxs: Sequence[int]) -> nn.Module:
-        keep_idxs = list(set(range(layer.in_features)) - set(idxs))
-        keep_idxs.sort()
-        layer.in_features = layer.in_features-len(idxs)
-        layer.weight = torch.nn.Parameter(
-            layer.weight.data[:, keep_idxs])
-        return layer
+        if is_deepspeed_zero3_enabled():
+            import deepspeed
+            # with deepspeed.zero.Init(config_dict_or_path=deepspeed_config()):
+            with deepspeed.zero.GatheredParameters(layer.weight, modifier_rank=0):
+                keep_idxs = list(set(range(layer.in_features)) - set(idxs))
+                keep_idxs.sort()
+                layer.in_features = layer.in_features-len(idxs)
+                layer.weight = torch.nn.Parameter(layer.weight.data.detach()[:, keep_idxs])
+            deepspeed.zero.Init(layer)
+            return layer
+        else:
+            keep_idxs = list(set(range(layer.in_features)) - set(idxs))
+            keep_idxs.sort()
+            layer.in_features = layer.in_features-len(idxs)
+            layer.weight = torch.nn.Parameter(layer.weight.data.detach()[:, keep_idxs])
+            return layer
 
     def get_out_channels(self, layer):
         return layer.out_features
@@ -211,10 +235,16 @@ class LayernormPruner(BasePruningFunc):
         keep_idxs = torch.tensor(list(set(range(num_features)) - set(idxs))).to(layer.weight.device)
         keep_idxs.sort()
         if layer.elementwise_affine:
-            layer.weight = torch.nn.Parameter(
-                layer.weight.data.index_select(pruning_dim, keep_idxs))
-            layer.bias = torch.nn.Parameter(
-                layer.bias.data.index_select(pruning_dim, keep_idxs))
+            if is_deepspeed_zero3_enabled():
+                import deepspeed
+                with deepspeed.zero.GatheredParameters([layer.weight], modifier_rank=0):
+                    layer.weight = torch.nn.Parameter(layer.weight.data.index_select(pruning_dim, keep_idxs))
+                    layer.bias = torch.nn.Parameter(layer.bias.data.index_select(pruning_dim, keep_idxs))
+            else:
+                layer.weight = torch.nn.Parameter(
+                    layer.weight.data.index_select(pruning_dim, keep_idxs))
+                layer.bias = torch.nn.Parameter(
+                    layer.bias.data.index_select(pruning_dim, keep_idxs))
         if pruning_dim != -1:
             layer.normalized_shape = layer.normalized_shape[:pruning_dim] + (
                 keep_idxs.size(0), ) + layer.normalized_shape[pruning_dim+1:]

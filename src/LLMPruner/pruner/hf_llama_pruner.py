@@ -8,7 +8,7 @@ from copy import deepcopy
 import random
 from functools import reduce
 from operator import mul
-
+from transformers.deepspeed import is_deepspeed_zero3_enabled
 from typing import Callable, Sequence, Tuple, Dict
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
@@ -255,19 +255,49 @@ class TaylorImportance(tp.importance.Importance):
             if prune_fn in [hf_attention_pruner.prune_out_channels]:
                 salience = {}
                 for sub_layer in [layer.o_proj, layer.q_proj, layer.k_proj, layer.v_proj]:
-                    salience[sub_layer] = sub_layer.weight * sub_layer.weight.grad
+                    if is_deepspeed_zero3_enabled():
+                        import deepspeed
+                        with deepspeed.zero.GatheredParameters([sub_layer.weight]):
+                            weight = layer.weight.data.detach().to('cpu')
+                            salience[sub_layer] = weight * sub_layer.weight.offload_grad
 
-                    if self.taylor in ['param_second']:
-                        salience[sub_layer] = sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight
-                    elif self.taylor in ['param_mix']: 
-                        salience[sub_layer] = -salience + 0.5 * sub_layer.weight * sub_layer.weight.acc_grad * sub_layer.weight   
+                            if self.taylor in ['param_second']:
+                                salience[sub_layer] = weight * sub_layer.weight.acc_grad * weight
+                            elif self.taylor in ['param_mix']: 
+                                salience[sub_layer] = -salience + 0.5 * weight * sub_layer.weight.acc_grad * weight
+                    else:
+                        weight = layer.weight.data.detach().to('cpu')
+                        salience[sub_layer] = weight * sub_layer.weight.offload_grad
+
+                        if self.taylor in ['param_second']:
+                            salience[sub_layer] = weight * sub_layer.weight.acc_grad * weight
+                        elif self.taylor in ['param_mix']: 
+                            salience[sub_layer] = -salience + 0.5 * weight * sub_layer.weight.acc_grad * weight
             else:
-                salience = layer.weight * layer.weight.grad
-
-                if self.taylor in ['param_second']:
-                    salience = layer.weight * layer.weight.acc_grad * layer.weight
-                elif self.taylor in ['param_mix']: 
-                    salience = salience - 0.5 * layer.weight * layer.weight.acc_grad * layer.weight
+                if is_deepspeed_zero3_enabled():
+                    import deepspeed
+                    with deepspeed.zero.GatheredParameters([layer.weight]):
+                        weight = layer.weight.data.detach().to(device = 'cpu', dtype = torch.float32)
+                        if self.taylor in ['param_first']:
+                            salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32)
+                        elif self.taylor in ['param_second']:
+                            salience = weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
+                        elif self.taylor in ['param_mix']: 
+                            salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32) - 0.5 * weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
+                        layer.weight.offload_grad = None
+                        layer.weight.acc_grad = None
+                        torch.cuda.empty_cache()
+                else:
+                    weight = layer.weight.data.detach().to(device = 'cpu', dtype = torch.float32)
+                    if self.taylor in ['param_first']:
+                        salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32)
+                    elif self.taylor in ['param_second']:
+                        salience = weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
+                    elif self.taylor in ['param_mix']: 
+                        salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32) - 0.5 * weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
+                    layer.weight.offload_grad = None
+                    layer.weight.acc_grad = None
+                    torch.cuda.empty_cache()
                     
             # Linear out_channels
             if prune_fn in [tp.prune_linear_out_channels, hf_linear_pruner.prune_out_channels]:
