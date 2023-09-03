@@ -1033,6 +1033,12 @@ class PrunerArguments():
         },
     )
 
+    pruning_dataset: str = field(
+        default='redpajama',
+        metadata={
+            "help": "pruning dataset"
+        }
+    )
 
 
 PIPELINE_ARGUMENT_MAPPING = {
