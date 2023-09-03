@@ -79,8 +79,12 @@ class Trainer_with_distillation(Trainer):
         for i in range(1, len(student_hidden_states)):
             student_hidden_state = student_hidden_states[i]
             teacher_hidden_state = teacher_hidden_states[i]
+            seq_len = student_hidden_state.size(1)
             #compute mse loss of hidden states
-            mse_loss += torch.nn.functional.mse_loss(input = student_hidden_state, target = teacher_hidden_state) / len(student_hidden_states)
+            for j in range(seq_len):
+                input = student_hidden_state[:, j]
+                target = teacher_hidden_state[:, j]
+                mse_loss += torch.nn.functional.mse_loss(input = input, target = target) / (len(student_hidden_states) * seq_len)
         
         weighted_loss = loss + kl_loss * self.kl_w + mse_loss * self.mse_w
         print(f'hard label loss: {loss}, soft label loss: {kl_loss}, MSE loss: {mse_loss}, weighted sum: {weighted_loss}')
