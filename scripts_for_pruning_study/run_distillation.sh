@@ -23,6 +23,7 @@ deepspeed ${deepspeed_args} \
     --kl_t 2.0 \
     --kl_w 0.5 \
     --mse_w 0.5 \
+    --hard_w 1.0 \
     --dataset_path data/redpajama_mini_formatted \
     --output_dir ${output_dir} --overwrite_output_dir \
     --num_train_epochs 1 \

@@ -484,6 +484,10 @@ class DistillerArguments(TrainingArguments):
         default=.0, metadata={"help": "The weight of mse error"}
     )
 
+    hard_w: float = field(
+        default=1.0, metadata={"help": "The weight of hard label learning"}
+    )
+
 
 @dataclass
 class EvaluatorArguments:

@@ -30,11 +30,12 @@ from lmflow.pipeline.utils.peft_trainer import PeftTrainer, PeftSavingCallback
 logger = logging.getLogger(__name__)
 
 class Trainer_with_distillation(Trainer):
-    def init_distiller(self, ref_model, kl_t = 1.0, kl_w = .0, mse_w = .0):
+    def init_distiller(self, ref_model, kl_t = 1.0, kl_w = .0, mse_w = .0, hard_w = 1.0):
         self.ref_model = ref_model
         self.kl_t = kl_t
         self.kl_w = kl_w
         self.mse_w = mse_w
+        self.hard_w = hard_w
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
@@ -86,7 +87,7 @@ class Trainer_with_distillation(Trainer):
                 target = teacher_hidden_state[:, j]
                 mse_loss += torch.nn.functional.mse_loss(input = input, target = target) / (len(student_hidden_states) * seq_len)
         
-        weighted_loss = loss + kl_loss * self.kl_w + mse_loss * self.mse_w
+        weighted_loss = loss * self.hard_w + kl_loss * self.kl_w + mse_loss * self.mse_w
         print(f'hard label loss: {loss}, soft label loss: {kl_loss}, MSE loss: {mse_loss}, weighted sum: {weighted_loss}')
         return (weighted_loss, outputs) if return_outputs else weighted_loss
 
@@ -354,7 +355,8 @@ class Distiller(BaseTuner):
             ref_model=ref_model,
             kl_t=self.finetuner_args.kl_t,
             kl_w=self.finetuner_args.kl_w,
-            mse_w=self.finetuner_args.mse_w
+            mse_w=self.finetuner_args.mse_w,
+            hard_w=self.finetuner_args.hard_w
         )
 
         # Training
