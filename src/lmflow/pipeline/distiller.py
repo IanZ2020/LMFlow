@@ -73,8 +73,8 @@ class Trainer_with_distillation(Trainer):
 
         #compute kl loss of soft lables
         student_log_sm = torch.nn.functional.log_softmax(student_logits / self.kl_t, dim=-1)
-        teacher_log_sm = torch.nn.functional.softmax(teacher_logits / self.kl_t, dim=-1)
-        kl_loss = torch.nn.functional.kl_div(input=student_log_sm, target=teacher_log_sm) * (self.kl_t ** 2) 
+        teacher_sm = torch.nn.functional.softmax(teacher_logits / self.kl_t, dim=-1)
+        kl_loss = torch.nn.functional.kl_div(input=student_log_sm, target=teacher_sm) * (self.kl_t ** 2) 
 
         mse_loss = torch.nn.functional.mse_loss(input = student_hidden_states[0], target = teacher_hidden_states[0]) / len(student_hidden_states)
         for i in range(1, len(student_hidden_states)):
