@@ -66,12 +66,12 @@ class Trainer_with_distillation(Trainer):
                 )
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-        student_hidden_states = outputs['hidden_states']
+        student_hidden_states = torch.stack(outputs['hidden_states'])
         student_logits = outputs['logits']
 
         with torch.no_grad():
             teacher_outputs = self.ref_model(**inputs, output_hidden_states = True)
-            teacher_hidden_states = teacher_outputs['hidden_states']
+            teacher_hidden_states = torch.stack(teacher_outputs['hidden_states'])
             teacher_logits = teacher_outputs['logits']
 
         if self.top_k is not None:
@@ -82,9 +82,9 @@ class Trainer_with_distillation(Trainer):
         teacher_sm = torch.nn.functional.softmax(teacher_logits / self.kl_t, dim=-1).view(-1,student_logits.shape[-1])
         kl_loss = torch.nn.functional.kl_div(input=student_log_sm, target=teacher_sm, reduction = 'batchmean') * (self.kl_t ** 2) 
 
-        student_hidden_state = torch.stack(student_hidden_states).view(-1, student_hidden_states.shape[-1])
-        teacher_hidden_state = torch.stack(teacher_hidden_states).view(-1, student_hidden_states.shape[-1])
-        huber_loss = torch.nn.functional.huber_loss(input = student_hidden_state, target = teacher_hidden_state, reduction = 'batchmean')
+        student_hidden_states = student_hidden_states.view(-1, student_hidden_states.shape[-1])
+        teacher_hidden_states = teacher_hidden_states.view(-1, student_hidden_states.shape[-1])
+        huber_loss = torch.nn.functional.huber_loss(input = student_hidden_states, target = teacher_hidden_states, reduction = 'batchmean')
 
         weighted_loss = loss * self.hard_w + kl_loss * self.kl_w + huber_loss * self.mse_w
         print(f'hard label loss: {loss}, soft label loss: {kl_loss}, Huber loss: {huber_loss}, weighted sum: {weighted_loss}')
