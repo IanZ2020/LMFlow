@@ -78,13 +78,13 @@ class Trainer_with_distillation(Trainer):
             teacher_logits = TopKLogitsWarper(top_k=self.top_k)(None, teacher_logits)
 
         #compute kl loss of soft lables
-        student_log_sm = torch.nn.functional.log_softmax(student_logits / self.kl_t, dim=-1)
-        teacher_sm = torch.nn.functional.softmax(teacher_logits / self.kl_t, dim=-1)
-        kl_loss = torch.nn.functional.kl_div(input=student_log_sm, target=teacher_sm) * (self.kl_t ** 2) 
+        student_log_sm = torch.nn.functional.log_softmax(student_logits / self.kl_t, dim=-1).view(-1,student_logits.shape[-1])
+        teacher_sm = torch.nn.functional.softmax(teacher_logits / self.kl_t, dim=-1).view(-1,student_logits.shape[-1])
+        kl_loss = torch.nn.functional.kl_div(input=student_log_sm, target=teacher_sm, reduction = 'batchmean') * (self.kl_t ** 2) 
 
-        student_hidden_state = torch.stack(student_hidden_states)
-        teacher_hidden_state = torch.stack(teacher_hidden_states)
-        huber_loss = torch.nn.functional.huber_loss(input = student_hidden_state, target = teacher_hidden_state)
+        student_hidden_state = torch.stack(student_hidden_states).view(-1, student_hidden_states.shape[-1])
+        teacher_hidden_state = torch.stack(teacher_hidden_states).view(-1, student_hidden_states.shape[-1])
+        huber_loss = torch.nn.functional.huber_loss(input = student_hidden_state, target = teacher_hidden_state, reduction = 'batchmean')
 
         weighted_loss = loss * self.hard_w + kl_loss * self.kl_w + huber_loss * self.mse_w
         print(f'hard label loss: {loss}, soft label loss: {kl_loss}, Huber loss: {huber_loss}, weighted sum: {weighted_loss}')
