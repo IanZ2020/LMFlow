@@ -20,10 +20,11 @@ deepspeed ${deepspeed_args} \
     --arch_type  pruned_decoder_only\
     --model_name_or_path $1 \
     --ref_model pinkmanlove/llama-13b-hf \
-    --kl_t 2.0 \
-    --kl_w 0.5 \
-    --mse_w 0.5 \
-    --hard_w 1.0 \
+    --kl_t 1.0 \
+    --kl_w 1.0 \
+    --mse_w 1.0 \
+    --hard_w 0 \
+    --top_k 10 \
     --dataset_path data/redpajama_mini_formatted \
     --output_dir ${output_dir} --overwrite_output_dir \
     --num_train_epochs 1 \

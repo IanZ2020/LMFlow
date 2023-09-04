@@ -19,6 +19,7 @@ from transformers import (
     Trainer,
     default_data_collator,
     set_seed,
+    top_k_top_p_filtering
 )
 from copy import deepcopy
 from transformers.utils import send_example_telemetry
@@ -31,12 +32,13 @@ from lmflow.pipeline.utils.peft_trainer import PeftTrainer, PeftSavingCallback
 logger = logging.getLogger(__name__)
 
 class Trainer_with_distillation(Trainer):
-    def init_distiller(self, ref_model, kl_t = 1.0, kl_w = .0, mse_w = .0, hard_w = 1.0):
+    def init_distiller(self, ref_model, kl_t = 1.0, kl_w = .0, mse_w = .0, hard_w = 1.0, top_k = 10):
         self.ref_model = ref_model
         self.kl_t = kl_t
         self.kl_w = kl_w
         self.mse_w = mse_w
         self.hard_w = hard_w
+        self.top_k = top_k
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
@@ -71,6 +73,9 @@ class Trainer_with_distillation(Trainer):
             teacher_outputs = self.ref_model(**inputs, output_hidden_states = True)
             teacher_hidden_states = teacher_outputs['hidden_states']
             teacher_logits = teacher_outputs['logits']
+
+        if self.top_k is not None:
+            teacher_logits = top_k_top_p_filtering(teacher_logits, top_k=self.top_k)
 
         #compute kl loss of soft lables
         student_log_sm = torch.nn.functional.log_softmax(student_logits / self.kl_t, dim=-1)
@@ -350,7 +355,8 @@ class Distiller(BaseTuner):
             kl_t=self.finetuner_args.kl_t,
             kl_w=self.finetuner_args.kl_w,
             mse_w=self.finetuner_args.mse_w,
-            hard_w=self.finetuner_args.hard_w
+            hard_w=self.finetuner_args.hard_w,
+            top_k = self.finetuner_args.top_k
         )
 
         # Training

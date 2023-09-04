@@ -488,6 +488,10 @@ class DistillerArguments(TrainingArguments):
         default=1.0, metadata={"help": "The weight of hard label learning"}
     )
 
+    top_k: Optional[int] = field(
+        default=None, metadata={"help": "top_k value of logits"}
+    )
+
 
 @dataclass
 class EvaluatorArguments:
