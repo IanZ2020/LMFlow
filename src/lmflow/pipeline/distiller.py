@@ -19,7 +19,7 @@ from transformers import (
     Trainer,
     default_data_collator,
     set_seed,
-    top_k_top_p_filtering
+    TopKLogitsWarper
 )
 from copy import deepcopy
 from transformers.utils import send_example_telemetry
@@ -75,7 +75,7 @@ class Trainer_with_distillation(Trainer):
             teacher_logits = teacher_outputs['logits']
 
         if self.top_k is not None:
-            teacher_logits = top_k_top_p_filtering(teacher_logits, top_k=self.top_k)
+            teacher_logits = TopKLogitsWarper(top_k=self.top_k)(None, teacher_logits)
 
         #compute kl loss of soft lables
         student_log_sm = torch.nn.functional.log_softmax(student_logits / self.kl_t, dim=-1)
