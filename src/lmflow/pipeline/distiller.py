@@ -11,6 +11,7 @@ import sys
 import datasets
 import transformers
 import deepspeed
+import torch.distributed as dist
 import evaluate
 import torch
 from itertools import chain
@@ -76,19 +77,12 @@ class Trainer_with_distillation(Trainer):
         teacher_sm = torch.nn.functional.softmax(teacher_logits / self.kl_t, dim=-1)
         kl_loss = torch.nn.functional.kl_div(input=student_log_sm, target=teacher_sm) * (self.kl_t ** 2) 
 
-        mse_loss = torch.nn.functional.mse_loss(input = student_hidden_states[0], target = teacher_hidden_states[0]) / len(student_hidden_states)
-        for i in range(1, len(student_hidden_states)):
-            student_hidden_state = student_hidden_states[i]
-            teacher_hidden_state = teacher_hidden_states[i]
-            seq_len = student_hidden_state.size(1)
-            #compute mse loss of hidden states
-            for j in range(seq_len):
-                input = student_hidden_state[:, j]
-                target = teacher_hidden_state[:, j]
-                mse_loss += torch.nn.functional.mse_loss(input = input, target = target) / (len(student_hidden_states) * seq_len)
-        
-        weighted_loss = loss * self.hard_w + kl_loss * self.kl_w + mse_loss * self.mse_w
-        print(f'hard label loss: {loss}, soft label loss: {kl_loss}, MSE loss: {mse_loss}, weighted sum: {weighted_loss}')
+        student_hidden_state = torch.stack(student_hidden_states)
+        teacher_hidden_state = torch.stack(teacher_hidden_states)
+        huber_loss = torch.nn.functional.huber_loss(input = student_hidden_state, target = teacher_hidden_state)
+
+        weighted_loss = loss * self.hard_w + kl_loss * self.kl_w + huber_loss * self.mse_w
+        print(f'hard label loss: {loss}, soft label loss: {kl_loss}, Huber loss: {huber_loss}, weighted sum: {weighted_loss}')
         return (weighted_loss, outputs) if return_outputs else weighted_loss
 
 
