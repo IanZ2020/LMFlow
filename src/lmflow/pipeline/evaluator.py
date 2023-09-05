@@ -328,17 +328,17 @@ class Evaluator(BasePipeline):
             raise NotImplementedError("ppl evaluation is currently not supported for text2text dataset, please use text_only dataset.")
         texts = [ instance["text"] for instance in data_dict["instances"] ]
         encodings = model.get_tokenizer()("\n\n".join(texts), return_tensors="pt")
-        # Define some constant
-        if self.model_args.truncate_to_model_max_length:
-            try:
-                max_length = min(model.get_backend_model().config.n_positions, model.get_max_length())
-            except:
-                max_length = min(1024, model.get_max_length())
-        else:
-            max_length = self.block_size
+        # # Define some constant
+        # if self.model_args.truncate_to_model_max_length:
+        #     try:
+        #         max_length = min(model.get_backend_model().config.n_positions, model.get_max_length())
+        #     except:
+        #         max_length = min(1024, model.get_max_length())
+        # else:
+        #     max_length = self.block_size
         
-        if verbose:
-            print(f"The maximum sequence length : {max_length}")
+        # if verbose:
+        #     print(f"The maximum sequence length : {max_length}")
         encode_batch_num = encodings.input_ids.size(0)
         seq_len = encodings.input_ids.size(1)
 
@@ -368,18 +368,17 @@ class Evaluator(BasePipeline):
             if verbose:
                 print(f"rank{self.local_rank}, Evaluating PPL: {count} / {num_of_batch} Complete, current ppl : {torch.exp(torch.stack(nlls).mean())}")
             
-        ppl = torch.exp(torch.stack(nlls).mean())
-        
-        all_process = ppl
+        all_process = torch.stack(nlls).mean()
         dist.all_reduce(all_process, dist.ReduceOp.SUM, async_op=False)
         result = all_process / self.world_size
+        ppl = torch.exp(result)
         
         if not dist.is_initialized() or dist.get_rank() == 0:
             with open('/home/zhangyihan/projects/LMFlow/output_models/eval_results.txt', 'a') as f:
                 f.write(f'model_name_or_path: {self.model_args.model_name_or_path}, dataset_path: {self.data_args.dataset_path}, block_size: {self.evaluator_args.evaluate_block_size}, metric:{self.evaluator_args.metric}')
-                f.write(f"Eval result: {result}")
+                f.write(f"Eval result: {ppl}")
                 f.write("\n******************************\n")
-        return result
+        return ppl
 
     def _evaluate_layer_importance(self, model, dataset: Dataset, verbose=True):
         data_dict = dataset.to_dict()
