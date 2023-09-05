@@ -459,6 +459,39 @@ class FinetunerArguments(TrainingArguments):
         default=None, metadata={"help": "The path of the eval dataset to use."}
     )
 
+@dataclass
+class DistillerArguments(TrainingArguments):
+    """
+    Adapt transformers.TrainingArguments
+    """
+    ref_model: Optional[str] = field(
+        default=None, metadata={"help": "The ref model you want distill from"}
+    )
+
+    eval_dataset_path: Optional[str] = field(
+        default=None, metadata={"help": "The path of the eval dataset to use."}
+    )
+
+    kl_t: float = field(
+        default=1.0, metadata={"help": "The temprature used when doing soft label learning"}
+    )
+
+    kl_w: float = field(
+        default=.0, metadata={"help": "The weight of soft label learning"}
+    )
+
+    mse_w: float = field(
+        default=.0, metadata={"help": "The weight of mse error"}
+    )
+
+    hard_w: float = field(
+        default=1.0, metadata={"help": "The weight of hard label learning"}
+    )
+
+    top_k: Optional[int] = field(
+        default=None, metadata={"help": "top_k value of logits"}
+    )
+
 
 @dataclass
 class EvaluatorArguments:
@@ -1022,6 +1055,7 @@ PIPELINE_ARGUMENT_MAPPING = {
     "inferencer": InferencerArguments,
     "raft_aligner": RaftAlignerArguments,
     "pruner": PrunerArguments,
+    "distiller": DistillerArguments
 }
 
 

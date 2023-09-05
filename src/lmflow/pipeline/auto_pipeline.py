@@ -7,13 +7,14 @@ from lmflow.pipeline.evaluator import Evaluator
 from lmflow.pipeline.finetuner import Finetuner
 from lmflow.pipeline.inferencer import Inferencer
 from lmflow.pipeline.raft_aligner import RaftAligner
-
+from lmflow.pipeline.distiller import Distiller
 
 PIPELINE_MAPPING = {
     "evaluator": Evaluator,
     "finetuner": Finetuner,
     "inferencer": Inferencer,
     "raft_aligner": RaftAligner,
+    "distiller": Distiller
 }
 
 
