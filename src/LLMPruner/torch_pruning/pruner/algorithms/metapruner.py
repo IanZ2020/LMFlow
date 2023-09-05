@@ -315,8 +315,6 @@ class MetaPruner:
         # global pruning through thresholding
         thres = topk_imp[-1]
         print(n_pruned, target_sparsity, self.initial_total_channels, len(global_importance), len(imp),thres)
-        torch.save(imp, '/home/zhangyihan/LMFlow/prune_log/imp.pt')
-        torch.save(thres, '/home/zhangyihan/LMFlow/prune_log/thres.pt')
         for group, ch_groups, consecutive_groups, imp in global_importance:
             module = group[0][0].target.module
             pruning_fn = group[0][0].handler
