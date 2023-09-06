@@ -57,12 +57,18 @@ try:
 except:
     pass
 
-def acc_grad(model):
+def acc_grad(model, firstabs = False):
     for param in model.parameters():
         if hasattr(param, 'offload_grad'):
-            param.offload_grad += param.grad.data.detach().to('cpu')
+            if firstabs:
+                param.offload_grad += param.grad.data.detach().to('cpu').abs()
+            else:
+                param.offload_grad += param.grad.data.detach().to('cpu')
         else:
-            param.offload_grad = param.grad.data.detach().to('cpu')
+            if firstabs:
+                param.offload_grad = param.grad.data.detach().to('cpu').abs()
+            else:
+                param.offload_grad = param.grad.data.detach().to('cpu')
         if hasattr(param, 'acc_grad'):
             param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
         else:
@@ -279,7 +285,7 @@ def main(model_args, data_args, args):
                     loss = ds_engine.module(batch_input, labels=batch_input).loss
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
-                    acc_grad(model)
+                    acc_grad(model, args.firstabs)
                 average_gradients(model)
                 del loss.grad
                     

@@ -1048,6 +1048,13 @@ class PrunerArguments():
         }
     )
 
+    firstabs: bool = field(
+        default=False,
+        metadata={
+            "help": "whether to abs first order grad"
+        }
+    )
+
 
 PIPELINE_ARGUMENT_MAPPING = {
     "finetuner": FinetunerArguments,
