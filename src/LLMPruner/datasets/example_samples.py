@@ -41,8 +41,25 @@ def get_bookcorpus(tokenizer, n_samples, seq_len):
         tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
     return torch.cat(tokenized_samples, dim=0 )
 
+def get_wikitext(tokenizer, n_samples, seq_len):
+    traindata = load_dataset(
+        'wikitext', 'wikitext-103-raw-v1', split='train'
+    )
+    
+    tokenized_samples, history = [], []
+    for _ in range(n_samples):
+        while True:
+            i = random.randint(0, len(traindata) - 1)
+            tokenized_sample = tokenizer(traindata[i]['text'], return_tensors='pt')
+            if tokenized_sample.input_ids.shape[1] >= seq_len and i not in history:
+                history.append(i)
+                break
+        i = random.randint(0, tokenized_sample.input_ids.shape[1] - seq_len)
+        tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
+    return torch.cat(tokenized_samples, dim=0 )
+
 def get_redpajama(tokenizer, n_samples, seq_len):
-    dataset_path = 'data/redpajama_mini_formatted'
+    dataset_path = 'data/red_test_mini'
     block_size = seq_len
     data_args = DatasetArguments(dataset_path=dataset_path, block_size=block_size, max_train_samples=n_samples)
     dataset = Dataset(data_args)
@@ -79,5 +96,7 @@ def get_examples(dataset, tokenizer, n_samples, seq_len = 128):
         return get_bookcorpus(tokenizer, n_samples, seq_len)
     elif dataset == 'redpajama':
         return get_redpajama(tokenizer, n_samples, seq_len)
+    elif dataset == 'wikitext':
+        return get_wikitext(tokenizer, n_samples, seq_len)
     else:
         raise NotImplementedError
