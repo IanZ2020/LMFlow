@@ -77,16 +77,17 @@ def acc_grad(model, firstabs = False, second_grad = False):
         param.grad = None
         torch.cuda.empty_cache()
 
-def average_gradients(model):
+def average_gradients(model, second_grad = False):
     size = float(dist.get_world_size())
     for param in model.parameters():
         param.offload_grad = param.offload_grad.to(dist.get_rank())
         dist.all_reduce(param.offload_grad.data, op=dist.ReduceOp.SUM)
         param.offload_grad = param.offload_grad.to('cpu')
         torch.cuda.empty_cache()
-        param.acc_grad = param.acc_grad.to(dist.get_rank())
-        dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
-        param.acc_grad = param.acc_grad.to('cpu')
+        if second_grad:
+            param.acc_grad = param.acc_grad.to(dist.get_rank())
+            dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
+            param.acc_grad = param.acc_grad.to('cpu')
         torch.cuda.empty_cache()
 
 def set_random_seed(seed):
@@ -291,7 +292,7 @@ def main(model_args, data_args, args):
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
                     acc_grad(model, args.firstabs, second_grad)
-                average_gradients(model)
+                average_gradients(model, second_grad)
                 del loss.grad
                     
             pruner.step()
