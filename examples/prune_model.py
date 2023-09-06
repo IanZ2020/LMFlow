@@ -241,6 +241,8 @@ def main(model_args, data_args, args):
     
     if 'first' not in args.taylor:
         second_grad = True
+    else:
+        second_grad = False
 
     if args.block_wise:
         kwargs = {
