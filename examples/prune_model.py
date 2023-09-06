@@ -57,7 +57,7 @@ try:
 except:
     pass
 
-def acc_grad(model, firstabs = False):
+def acc_grad(model, firstabs = False, second_grad = False):
     for param in model.parameters():
         if hasattr(param, 'offload_grad'):
             if firstabs:
@@ -69,10 +69,11 @@ def acc_grad(model, firstabs = False):
                 param.offload_grad = param.grad.data.detach().to('cpu').abs()
             else:
                 param.offload_grad = param.grad.data.detach().to('cpu')
-        if hasattr(param, 'acc_grad'):
-            param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
-        else:
-            param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
+        if second_grad:
+            if hasattr(param, 'acc_grad'):
+                param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
+            else:
+                param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
         param.grad = None
         torch.cuda.empty_cache()
 
@@ -238,6 +239,9 @@ def main(model_args, data_args, args):
 
     logger.log("Use {} pruner...".format(pruner_type))
     
+    if 'first' not in args.taylor:
+        second_grad = True
+
     if args.block_wise:
         kwargs = {
             "importance": imp,
@@ -269,7 +273,6 @@ def main(model_args, data_args, args):
         ds_engine.module.train()
         logger.log("Start Pruning")
         for i in range(args.iterative_steps):
-
             if pruner_type in ['taylor']:
                 example_prompts = get_examples(args.pruning_dataset, tokenizer, args.num_examples, seq_len = args.prune_block_size).to(device = local_rank)
                 batch_num = args.num_examples // args.prune_batch_size
@@ -285,7 +288,7 @@ def main(model_args, data_args, args):
                     loss = ds_engine.module(batch_input, labels=batch_input).loss
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
-                    acc_grad(model, args.firstabs)
+                    acc_grad(model, args.firstabs, second_grad)
                 average_gradients(model)
                 del loss.grad
                     
