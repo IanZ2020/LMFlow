@@ -374,7 +374,7 @@ class Evaluator(BasePipeline):
         ppl = torch.exp(result)
         
         if not dist.is_initialized() or dist.get_rank() == 0:
-            with open('/home/zhangyihan/projects/LMFlow/output_models/eval_results.txt', 'a') as f:
+            with open('output_models/eval_results.txt', 'a') as f:
                 f.write(f'model_name_or_path: {self.model_args.model_name_or_path}, dataset_path: {self.data_args.dataset_path}, block_size: {self.evaluator_args.evaluate_block_size}, metric:{self.evaluator_args.metric}')
                 f.write(f"Eval result: {ppl}")
                 f.write("\n******************************\n")

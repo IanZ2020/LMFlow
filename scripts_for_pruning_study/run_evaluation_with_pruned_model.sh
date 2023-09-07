@@ -11,5 +11,5 @@ deepspeed ${deepspeed_args} examples/evaluation.py \
     --dataset_path $3 \
     --deepspeed examples/ds_config.json \
     --metric ppl \
-    --evaluate_block_size 2048 \
+    --evaluate_block_size 1024 \
     --batch_size 4
