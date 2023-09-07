@@ -386,20 +386,20 @@ def main(model_args, data_args, args):
     gc.collect()
     torch.cuda.empty_cache()
 
+    model.half()
+    config = PrunedLlamaConfig()
+    config.from_llama_model(model)
+    print('Get config')
+    model.config = config
     if args.save_model:
         print('saving model')
-        model.half()
-        config = PrunedLlamaConfig()
-        config.from_llama_model(model)
-        print('Get config')
-        model.config = config
         if is_deepspeed_zero3_enabled():
             save_zero3_model.save_zero3_model(model, logger.best_checkpoint_path)
         else:
             model.save_pretrained(logger.best_checkpoint_path)
         print('done')
-    if not dist.is_initialized() or dist.get_rank() == 0:
-        tokenizer.save_pretrained(logger.best_checkpoint_path)
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            tokenizer.save_pretrained(logger.best_checkpoint_path)
         
     dist.barrier()
 
