@@ -59,7 +59,7 @@ except:
 
 def acc_grad(model, firstabs = False, second_grad = False):
     for param in model.parameters():
-        if hasattr(param, 'offload_grad'):
+        if hasattr(param, 'offload_grad') and param.offload_grad is not None:
             if firstabs:
                 param.offload_grad += param.grad.data.detach().to('cpu').abs()
             else:
@@ -70,7 +70,7 @@ def acc_grad(model, firstabs = False, second_grad = False):
             else:
                 param.offload_grad = param.grad.data.detach().to('cpu')
         if second_grad:
-            if hasattr(param, 'acc_grad'):
+            if hasattr(param, 'acc_grad') and param.acc_grad is not None:
                 param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
             else:
                 param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
