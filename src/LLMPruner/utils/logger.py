@@ -3,7 +3,7 @@ import sys
 import time
 import codecs
 import logging
-
+import torch.distributed as dist
 
 class LoggerWithDepth():
     def __init__(self, env_name, config, local_rank=0, root_dir = 'runtime_log', overwrite = True, setup_sublogger = True):
@@ -39,10 +39,10 @@ class LoggerWithDepth():
             else:
                 os.mkdir(self.sub_dir)
 
-        self.write_description_to_folder(os.path.join(self.sub_dir, 'description.txt'), sub_config)
-        with open(os.path.join(self.sub_dir, 'train.sh'), 'w') as f:
-            f.write('python ' + ' '.join(sys.argv))
-
+            self.write_description_to_folder(os.path.join(self.sub_dir, 'description.txt'), sub_config)
+            with open(os.path.join(self.sub_dir, 'train.sh'), 'w') as f:
+                f.write('python ' + ' '.join(sys.argv))
+        dist.barrier()
         # Setup File/Stream Writer
         log_format=logging.Formatter("%(asctime)s - %(levelname)s :       %(message)s", "%Y-%m-%d %H:%M:%S")
         
@@ -65,7 +65,8 @@ class LoggerWithDepth():
         self.writer.info(info)
 
     def write_description_to_folder(self, file_name, config):
-        with codecs.open(file_name, 'w') as desc_f:
-            desc_f.write("- Training Parameters: \n")
-            for key, value in config.items():
-                desc_f.write("  - {}: {}\n".format(key, value))
+        if self.local_rank==0:
+            with codecs.open(file_name, 'w') as desc_f:
+                desc_f.write("- Training Parameters: \n")
+                for key, value in config.items():
+                    desc_f.write("  - {}: {}\n".format(key, value))
