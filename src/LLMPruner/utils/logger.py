@@ -29,14 +29,15 @@ class LoggerWithDepth():
 
         if setup_sublogger:
             sub_name = time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime())
-            self.setup_sublogger(sub_name+f'rank_{self.local_rank}', config)
+            self.setup_sublogger(sub_name, config)
 
     def setup_sublogger(self, sub_name, sub_config):
         self.sub_dir = os.path.join(self.log_dir, sub_name)
-        if os.path.exists(self.sub_dir):
-            raise Exception("Logging Directory {} Has Already Exists. Change to another sub name or set OVERWRITE to True".format(self.sub_dir))
-        else:
-            os.mkdir(self.sub_dir)
+        if self.local_rank==0:
+            if os.path.exists(self.sub_dir):
+                raise Exception("Logging Directory {} Has Already Exists. Change to another sub name or set OVERWRITE to True".format(self.sub_dir))
+            else:
+                os.mkdir(self.sub_dir)
 
         self.write_description_to_folder(os.path.join(self.sub_dir, 'description.txt'), sub_config)
         with open(os.path.join(self.sub_dir, 'train.sh'), 'w') as f:

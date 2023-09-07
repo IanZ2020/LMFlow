@@ -59,7 +59,7 @@ def get_wikitext(tokenizer, n_samples, seq_len):
     return torch.cat(tokenized_samples, dim=0 )
 
 def get_redpajama(tokenizer, n_samples, seq_len):
-    dataset_path = 'data/red_test_mini'
+    dataset_path = 'data/redpajama_mini_formatted'
     block_size = seq_len
     data_args = DatasetArguments(dataset_path=dataset_path, block_size=block_size, max_train_samples=n_samples)
     dataset = Dataset(data_args)
