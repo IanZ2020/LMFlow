@@ -73,7 +73,6 @@ def get_wikitext_cat(tokenizer, n_samples, seq_len):
                 break
         i = random.randint(0, tokenized_sample.input_ids.shape[1] - seq_len)
         tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
-        print(f'{j}/{n_samples}')
     return torch.cat(tokenized_samples, dim=0 )
 
 def get_redpajama(tokenizer, n_samples, seq_len):
@@ -119,7 +118,6 @@ def get_bookcorpus_cat(tokenizer, n_samples, seq_len):
                 break
         i = random.randint(0, tokenized_sample.input_ids.shape[1] - seq_len)
         tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
-        print(f'{j}/{n_samples}')
     return torch.cat(tokenized_samples, dim=0 )
 
 
@@ -135,6 +133,6 @@ def get_examples(dataset, tokenizer, n_samples, seq_len = 128):
     elif dataset == 'wikitext':
         return get_wikitext(tokenizer, n_samples, seq_len)
     elif dataset == 'wikitext_cat':
-        return get_wikitext(tokenizer, n_samples, seq_len)
+        return get_wikitext_cat(tokenizer, n_samples, seq_len)
     else:
         raise NotImplementedError
