@@ -58,6 +58,24 @@ def get_wikitext(tokenizer, n_samples, seq_len):
         tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
     return torch.cat(tokenized_samples, dim=0 )
 
+def get_wikitext_cat(tokenizer, n_samples, seq_len):
+    traindata = load_dataset(
+        'wikitext', 'wikitext-103-raw-v1', split='train'
+    )
+    l = 50
+    tokenized_samples, history = [], []
+    for j in range(n_samples):
+        while True:
+            i = random.randint(0, len(traindata) - l)
+            tokenized_sample = tokenizer(' '.join(traindata[i:i+l]['text']), return_tensors='pt')
+            if tokenized_sample.input_ids.shape[1] >= seq_len and i not in history:
+                history.extend(list(range(i,i+l)))
+                break
+        i = random.randint(0, tokenized_sample.input_ids.shape[1] - seq_len)
+        tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
+        print(f'{j}/{n_samples}')
+    return torch.cat(tokenized_samples, dim=0 )
+
 def get_redpajama(tokenizer, n_samples, seq_len):
     dataset_path = 'data/redpajama_mini_formatted'
     block_size = seq_len
@@ -86,7 +104,23 @@ def get_redpajama(tokenizer, n_samples, seq_len):
         tokenized_samples.append(group_text[i:i+seq_len].unsqueeze(dim = 0))
     return torch.cat(tokenized_samples, dim=0)
 
-
+def get_bookcorpus_cat(tokenizer, n_samples, seq_len):
+    traindata = load_dataset(
+        'bookcorpus', split='train'
+    )
+    l = 50
+    tokenized_samples, history = [], []
+    for j in range(n_samples):
+        while True:
+            i = random.randint(0, len(traindata) - l)
+            tokenized_sample = tokenizer(' '.join(traindata[i:i+l]['text']), return_tensors='pt')
+            if tokenized_sample.input_ids.shape[1] >= seq_len and i not in history:
+                history.extend(list(range(i,i+l)))
+                break
+        i = random.randint(0, tokenized_sample.input_ids.shape[1] - seq_len)
+        tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
+        print(f'{j}/{n_samples}')
+    return torch.cat(tokenized_samples, dim=0 )
 
 
 def get_examples(dataset, tokenizer, n_samples, seq_len = 128):
@@ -94,9 +128,13 @@ def get_examples(dataset, tokenizer, n_samples, seq_len = 128):
         return get_c4(tokenizer, n_samples, seq_len)
     elif dataset == 'bookcorpus':
         return get_bookcorpus(tokenizer, n_samples, seq_len)
+    elif dataset == 'bookcorpus_cat':
+        return get_bookcorpus_cat(tokenizer, n_samples, seq_len)
     elif dataset == 'redpajama':
         return get_redpajama(tokenizer, n_samples, seq_len)
     elif dataset == 'wikitext':
+        return get_wikitext(tokenizer, n_samples, seq_len)
+    elif dataset == 'wikitext_cat':
         return get_wikitext(tokenizer, n_samples, seq_len)
     else:
         raise NotImplementedError
