@@ -3,7 +3,7 @@ import sys
 import time
 import codecs
 import logging
-
+import torch.distributed as dist
 
 class LoggerWithDepth():
     def __init__(self, env_name, config, local_rank=0, root_dir = 'runtime_log', overwrite = True, setup_sublogger = True):
@@ -29,19 +29,20 @@ class LoggerWithDepth():
 
         if setup_sublogger:
             sub_name = time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime())
-            self.setup_sublogger(sub_name+f'rank_{self.local_rank}', config)
+            self.setup_sublogger(sub_name, config)
 
     def setup_sublogger(self, sub_name, sub_config):
         self.sub_dir = os.path.join(self.log_dir, sub_name)
-        if os.path.exists(self.sub_dir):
-            raise Exception("Logging Directory {} Has Already Exists. Change to another sub name or set OVERWRITE to True".format(self.sub_dir))
-        else:
-            os.mkdir(self.sub_dir)
+        if self.local_rank==0:
+            if os.path.exists(self.sub_dir):
+                raise Exception("Logging Directory {} Has Already Exists. Change to another sub name or set OVERWRITE to True".format(self.sub_dir))
+            else:
+                os.mkdir(self.sub_dir)
 
-        self.write_description_to_folder(os.path.join(self.sub_dir, 'description.txt'), sub_config)
-        with open(os.path.join(self.sub_dir, 'train.sh'), 'w') as f:
-            f.write('python ' + ' '.join(sys.argv))
-
+            self.write_description_to_folder(os.path.join(self.sub_dir, 'description.txt'), sub_config)
+            with open(os.path.join(self.sub_dir, 'train.sh'), 'w') as f:
+                f.write('python ' + ' '.join(sys.argv))
+        dist.barrier()
         # Setup File/Stream Writer
         log_format=logging.Formatter("%(asctime)s - %(levelname)s :       %(message)s", "%Y-%m-%d %H:%M:%S")
         
@@ -64,7 +65,8 @@ class LoggerWithDepth():
         self.writer.info(info)
 
     def write_description_to_folder(self, file_name, config):
-        with codecs.open(file_name, 'w') as desc_f:
-            desc_f.write("- Training Parameters: \n")
-            for key, value in config.items():
-                desc_f.write("  - {}: {}\n".format(key, value))
+        if self.local_rank==0:
+            with codecs.open(file_name, 'w') as desc_f:
+                desc_f.write("- Training Parameters: \n")
+                for key, value in config.items():
+                    desc_f.write("  - {}: {}\n".format(key, value))

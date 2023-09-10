@@ -58,29 +58,37 @@ try:
 except:
     pass
 
-def acc_grad(model):
+def acc_grad(model, firstabs = False, second_grad = False):
     for param in model.parameters():
-        if hasattr(param, 'offload_grad'):
-            param.offload_grad += param.grad.data.detach().to('cpu')
+        if hasattr(param, 'offload_grad') and param.offload_grad is not None:
+            if firstabs:
+                param.offload_grad += param.grad.data.detach().to('cpu').abs()
+            else:
+                param.offload_grad += param.grad.data.detach().to('cpu')
         else:
-            param.offload_grad = param.grad.data.detach().to('cpu')
-        if hasattr(param, 'acc_grad'):
-            param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
-        else:
-            param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
+            if firstabs:
+                param.offload_grad = param.grad.data.detach().to('cpu').abs()
+            else:
+                param.offload_grad = param.grad.data.detach().to('cpu')
+        if second_grad:
+            if hasattr(param, 'acc_grad') and param.acc_grad is not None:
+                param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
+            else:
+                param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
         param.grad = None
         torch.cuda.empty_cache()
 
-def average_gradients(model):
+def average_gradients(model, second_grad = False):
     size = float(dist.get_world_size())
     for param in model.parameters():
         param.offload_grad = param.offload_grad.to(dist.get_rank())
         dist.all_reduce(param.offload_grad.data, op=dist.ReduceOp.SUM)
         param.offload_grad = param.offload_grad.to('cpu')
         torch.cuda.empty_cache()
-        param.acc_grad = param.acc_grad.to(dist.get_rank())
-        dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
-        param.acc_grad = param.acc_grad.to('cpu')
+        if second_grad:
+            param.acc_grad = param.acc_grad.to(dist.get_rank())
+            dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
+            param.acc_grad = param.acc_grad.to('cpu')
         torch.cuda.empty_cache()
 
 def set_random_seed(seed):
@@ -233,6 +241,11 @@ def main(model_args, data_args, args):
 
     logger.log("Use {} pruner...".format(pruner_type))
     
+    if 'first' not in args.taylor:
+        second_grad = True
+    else:
+        second_grad = False
+
     if args.block_wise:
         kwargs = {
             "importance": imp,
@@ -264,7 +277,6 @@ def main(model_args, data_args, args):
         ds_engine.module.train()
         logger.log("Start Pruning")
         for i in range(args.iterative_steps):
-
             if pruner_type in ['taylor']:
                 example_prompts = get_examples(args.pruning_dataset, tokenizer, args.num_examples, seq_len = args.prune_block_size).to(device = local_rank)
                 batch_num = args.num_examples // args.prune_batch_size
@@ -280,8 +292,8 @@ def main(model_args, data_args, args):
                     loss = ds_engine.module(batch_input, labels=batch_input).loss
                     logger.log(f'batch{j}, loss: {loss}')
                     loss.backward()
-                    acc_grad(model)
-                average_gradients(model)
+                    acc_grad(model, args.firstabs, second_grad)
+                average_gradients(model, second_grad)
                 del loss.grad
                     
             pruner.step()
@@ -302,6 +314,12 @@ def main(model_args, data_args, args):
             # modify inferece-related attributes
             for layer in model.model.layers:
                 layer.self_attn.num_heads = layer.self_attn.q_proj.out_features // layer.self_attn.head_dim
+            
+            #evaluate the model after each step of pruning
+            dataset = Dataset(data_args)
+            ppl = evaluate_ppl(ds_engine.module, tokenizer, dataset = dataset, block_size = data_args.block_size)
+            logger.log("PPL after pruning: {}".format(ppl))
+            logger.log("Memory Requirement: {} MiB\n".format(torch.cuda.memory_allocated()/1024/1024))
 
         # Clean the gradient in the model
         model.zero_grad()
@@ -375,20 +393,20 @@ def main(model_args, data_args, args):
     gc.collect()
     torch.cuda.empty_cache()
 
+    model.half()
+    config = PrunedLlamaConfig()
+    config.from_llama_model(model)
+    print('Get config')
+    model.config = config
     if args.save_model:
         print('saving model')
-        model.half()
-        config = PrunedLlamaConfig()
-        config.from_llama_model(model)
-        print('Get config')
-        model.config = config
         if is_deepspeed_zero3_enabled():
             save_zero3_model.save_zero3_model(model, logger.best_checkpoint_path)
         else:
             model.save_pretrained(logger.best_checkpoint_path)
         print('done')
-    if not dist.is_initialized() or dist.get_rank() == 0:
-        tokenizer.save_pretrained(logger.best_checkpoint_path)
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            tokenizer.save_pretrained(logger.best_checkpoint_path)
         
     dist.barrier()
 

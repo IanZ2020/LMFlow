@@ -278,7 +278,7 @@ class TaylorImportance(tp.importance.Importance):
                     import deepspeed
                     with deepspeed.zero.GatheredParameters([layer.weight]):
                         weight = layer.weight.data.detach().to(device = 'cpu', dtype = torch.float32)
-                        if self.taylor in ['param_first']:
+                        if self.taylor in ['param_first', 'vectorize']:
                             salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32)
                         elif self.taylor in ['param_second']:
                             salience = weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
@@ -289,7 +289,7 @@ class TaylorImportance(tp.importance.Importance):
                         torch.cuda.empty_cache()
                 else:
                     weight = layer.weight.data.detach().to(device = 'cpu', dtype = torch.float32)
-                    if self.taylor in ['param_first']:
+                    if self.taylor in ['param_first', 'vectorize']:
                         salience = weight * layer.weight.offload_grad.to(device = 'cpu', dtype = torch.float32)
                     elif self.taylor in ['param_second']:
                         salience = weight * layer.weight.acc_grad.to(device = 'cpu', dtype = torch.float32) * weight
@@ -304,7 +304,7 @@ class TaylorImportance(tp.importance.Importance):
                 if self.taylor == 'vectorize':
                     local_norm = salience.sum(1).abs()
                 elif 'param' in self.taylor:
-                    local_norm = salience.abs().sum(1) / salience.shape[1]
+                    local_norm = salience.abs().sum(1)
                 else:
                     raise NotImplementedError
                 group_imp.append(local_norm)
@@ -314,7 +314,7 @@ class TaylorImportance(tp.importance.Importance):
                 if self.taylor == 'vectorize':
                     local_norm = salience.sum(0).abs()
                 elif 'param' in self.taylor:
-                    local_norm = salience.abs().sum(0) / salience.shape[0]
+                    local_norm = salience.abs().sum(0)
                 else:
                     raise NotImplementedError
                 local_norm = local_norm[idxs]
