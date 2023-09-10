@@ -410,12 +410,6 @@ def main(model_args, data_args, args):
         
     dist.barrier()
 
-    if args.test_after_train:
-        dataset = Dataset(data_args)
-        ppl = evaluate_ppl(ds_engine.module, tokenizer, dataset = dataset, block_size = data_args.block_size)
-        logger.log("PPL after pruning: {}".format(ppl))
-        logger.log("Memory Requirement: {} MiB\n".format(torch.cuda.memory_allocated()/1024/1024))
-
 if __name__ == "__main__":
     ## Prepare training_args
     pipeline_name = "pruner"
