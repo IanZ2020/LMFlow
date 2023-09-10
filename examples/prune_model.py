@@ -33,6 +33,7 @@ from LLMPruner.utils.logger import LoggerWithDepth
 from LLMPruner.evaluator.ppl import PPLMetric, evaluate_ppl
 from LLMPruner.datasets.example_samples import get_examples
 from LLMPruner.templates.prompts import prompts
+from deepspeed.runtime.zero import ZeroParamStatus
 
 MODELS_SUPPORT_FLASH_ATTENTION = [
     "PrunedLlamaForCausalLM",
@@ -288,7 +289,7 @@ def main(model_args, data_args, args):
             if is_deepspeed_zero3_enabled():
                 after_pruning_parameters = 0
                 for name,p in model.named_parameters():
-                    if name == 'model.embed_tokens.weight': 
+                    if p.ds_status == ZeroParamStatus.AVAILABLE: 
                         after_pruning_parameters += p.numel()
                     else:
                         with deepspeed.zero.GatheredParameters(p):

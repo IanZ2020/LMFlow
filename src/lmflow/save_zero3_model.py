@@ -9,6 +9,7 @@ from collections import OrderedDict, namedtuple
 from copy import deepcopy
 import torch
 import torch.distributed as dist
+from deepspeed.runtime.zero import ZeroParamStatus
 
 def add_variant(weights_name: str, variant: Optional[str] = None) -> str:
     if variant is not None:
@@ -24,7 +25,7 @@ def save_to_state_dict(model, device, destination, prefix, keep_vars):
 
     for name, param in model._parameters.items():
         if param is not None:
-            if prefix + name == 'model.embed_tokens.weight': 
+            if param.ds_status == ZeroParamStatus.AVAILABLE: 
                 destination[prefix + name] = param.detach().to(device)
             else:
                 with deepspeed.zero.GatheredParameters(param):
