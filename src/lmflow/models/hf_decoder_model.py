@@ -346,7 +346,10 @@ class HFDecoderModel(DecoderModel, Tunable):
                     model.gradient_checkpointing_enable()
                     model = prepare_model_for_kbit_training(model)
             else:
-                model = AutoModelForCausalLM.from_config(config)
+                if model_args.arch_type == 'pruned_decoder_only':
+                    model = PrunedLlamaForCausalLM.from_config(config)
+                else:
+                    model = AutoModelForCausalLM.from_config(config)
                 n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
                 logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
             self.backend_model_full = model
@@ -779,23 +782,39 @@ class HFDecoderModel(DecoderModel, Tunable):
                 "revision": self.model_args.model_revision,
                 "use_auth_token": True if self.model_args.use_auth_token else None,
             }
-            config = AutoConfig.from_pretrained(self.model_args.model_name_or_path, **config_kwargs)
+            if self.model_args.arch_type == 'pruned_decoder_only':
+                config = PrunedLlamaConfig.from_pretrained(self.model_args.model_name_or_path, **config_kwargs)
+            else:
+                config = AutoConfig.from_pretrained(self.model_args.model_name_or_path, **config_kwargs)
             device_map = "auto"
             if os.environ.get('LOCAL_RANK') is not None:
                 local_rank = int(os.environ.get('LOCAL_RANK','0'))
                 device_map = {'': local_rank}
 
-            self.backend_model_full = AutoModelForCausalLM.from_pretrained(
-                self.model_args.model_name_or_path,
-                from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
-                config=config,
-                cache_dir=self.model_args.cache_dir,
-                revision=self.model_args.model_revision,
-                use_auth_token=True if self.model_args.use_auth_token else None,
-                torch_dtype=torch_dtype,
-                device_map=device_map,
-                trust_remote_code = self.model_args.trust_remote_code,
-            )
+            if self.model_args.arch_type == 'pruned_decoder_only':
+                self.backend_model_full = PrunedLlamaForCausalLM.from_pretrained(
+                    self.model_args.model_name_or_path,
+                    from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
+                    config=config,
+                    cache_dir=self.model_args.cache_dir,
+                    revision=self.model_args.model_revision,
+                    use_auth_token=True if self.model_args.use_auth_token else None,
+                    torch_dtype=torch_dtype,
+                    device_map=device_map,
+                    trust_remote_code = self.model_args.trust_remote_code,
+                )
+            else:
+                self.backend_model_full = AutoModelForCausalLM.from_pretrained(
+                    self.model_args.model_name_or_path,
+                    from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
+                    config=config,
+                    cache_dir=self.model_args.cache_dir,
+                    revision=self.model_args.model_revision,
+                    use_auth_token=True if self.model_args.use_auth_token else None,
+                    torch_dtype=torch_dtype,
+                    device_map=device_map,
+                    trust_remote_code = self.model_args.trust_remote_code,
+                )
         
             self.backend_model = PeftModel.from_pretrained(self.backend_model_full, tmpdirname)
 
