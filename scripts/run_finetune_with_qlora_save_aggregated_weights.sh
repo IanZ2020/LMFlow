@@ -2,8 +2,8 @@
 # Please run this script under ${project_id} in project directory of
 
 # Parses arguments
-model_name_or_path=gpt2
-dataset_path=data/alpaca/train
+model_name_or_path=meta-llama/Llama-2-13b-hf
+dataset_path=/home/paperspace/LMFlow/alpaca/train
 output_dir=output_models/finetune
 deepspeed_args="--master_port=11000"
 
@@ -48,8 +48,7 @@ deepspeed ${deepspeed_args} \
     --learning_rate 1e-4 \
     --block_size 512 \
     --per_device_train_batch_size 1 \
-    --use_lora 1 \
-    --lora_r 8 \
+    --use_qlora 1 \
     --save_aggregated_lora 1\
     --deepspeed configs/ds_config_zero2.json \
     --fp16 \

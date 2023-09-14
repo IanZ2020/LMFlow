@@ -21,8 +21,10 @@ and question answering.
 import hashlib
 import logging
 from typing import List, Union
-
+import os, shutil
 import deepspeed
+
+from pathlib import Path
 
 from peft import (
     LoraConfig,
@@ -30,6 +32,7 @@ from peft import (
     TaskType,
     get_peft_config,
     get_peft_model,
+    prepare_model_for_kbit_training
 )
 
 import torch
@@ -37,6 +40,9 @@ import transformers
 from transformers.deepspeed import HfDeepSpeedConfig
 
 from transformers.testing_utils import CaptureLogger
+
+from transformers import BitsAndBytesConfig
+import bitsandbytes
 
 from transformers import (
     CONFIG_MAPPING,
@@ -141,6 +147,7 @@ class HFDecoderModel(DecoderModel, Tunable):
             "use_fast": model_args.use_fast_tokenizer,
             "revision": model_args.model_revision,
             "use_auth_token": True if model_args.use_auth_token else None,
+            "trust_remote_code": model_args.trust_remote_code,
         }
         try:
             if model_args.tokenizer_name:
@@ -188,6 +195,7 @@ class HFDecoderModel(DecoderModel, Tunable):
             "cache_dir": model_args.cache_dir,
             "revision": model_args.model_revision,
             "use_auth_token": True if model_args.use_auth_token else None,
+            "trust_remote_code": model_args.trust_remote_code,
         }
         if model_args.config_name:
             config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
@@ -263,26 +271,80 @@ class HFDecoderModel(DecoderModel, Tunable):
                     
         if tune_strategy == 'normal':
             if model_args.model_name_or_path:
-                if model_args.arch_type == 'pruned_decoder_only':
-                    model = PrunedLlamaForCausalLM.from_pretrained(
-                        model_args.model_name_or_path,
-                        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-                        config=config,
-                        cache_dir=model_args.cache_dir,
-                        revision=model_args.model_revision,
-                        use_auth_token=True if model_args.use_auth_token else None,
-                        torch_dtype=torch_dtype,
+
+                compute_dtype = torch_dtype
+                device_map = "auto"
+                if os.environ.get('LOCAL_RANK') is not None:
+                    local_rank = int(os.environ.get('LOCAL_RANK','0'))
+                    device_map = {'': local_rank}
+
+                if model_args.use_qlora:
+                    model_args.use_lora = True
+                    quant_config = BitsAndBytesConfig(
+                        load_in_4bit=model_args.bits == 4,
+                        load_in_8bit=model_args.bits == 8,
+                        llm_int8_threshold=6.0,
+                        llm_int8_has_fp16_weight=False,
+                        bnb_4bit_compute_dtype=compute_dtype,
+                        bnb_4bit_use_double_quant=model_args.double_quant,
+                        bnb_4bit_quant_type=model_args.quant_type,
                     )
-                else:
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_args.model_name_or_path,
-                        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-                        config=config,
-                        cache_dir=model_args.cache_dir,
-                        revision=model_args.model_revision,
-                        use_auth_token=True if model_args.use_auth_token else None,
-                        torch_dtype=torch_dtype,
-                    )
+                try:
+                    if model_args.arch_type == 'pruned_decoder_only':
+                        model = PrunedLlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                            config=config,
+                            quantization_config=quant_config if model_args.use_qlora else None,
+                            cache_dir=model_args.cache_dir,
+                            revision=model_args.model_revision,
+                            use_auth_token=True if model_args.use_auth_token else None,
+                            torch_dtype=torch_dtype,
+                            device_map=device_map,
+                            trust_remote_code = model_args.trust_remote_code,
+                        )
+                    else:
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                            config=config,
+                            quantization_config=quant_config if model_args.use_qlora else None,
+                            cache_dir=model_args.cache_dir,
+                            revision=model_args.model_revision,
+                            use_auth_token=True if model_args.use_auth_token else None,
+                            torch_dtype=torch_dtype,
+                            device_map=device_map,
+                            trust_remote_code = model_args.trust_remote_code,
+                        )
+                #for deepspeed zero3, we don't need to specify device_map
+                except:
+                    if model_args.arch_type == 'pruned_decoder_only':
+                        model = PrunedLlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                            config=config,
+                            quantization_config=quant_config if model_args.use_qlora else None,
+                            cache_dir=model_args.cache_dir,
+                            revision=model_args.model_revision,
+                            use_auth_token=True if model_args.use_auth_token else None,
+                            torch_dtype=torch_dtype,
+                            trust_remote_code = model_args.trust_remote_code,
+                        )
+                    else:
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                            config=config,
+                            quantization_config=quant_config if model_args.use_qlora else None,
+                            cache_dir=model_args.cache_dir,
+                            revision=model_args.model_revision,
+                            use_auth_token=True if model_args.use_auth_token else None,
+                            torch_dtype=torch_dtype,
+                            trust_remote_code = model_args.trust_remote_code,
+                        )
+                if model_args.use_qlora:
+                    model.gradient_checkpointing_enable()
+                    model = prepare_model_for_kbit_training(model)
             else:
                 model = AutoModelForCausalLM.from_config(config)
                 n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
@@ -688,11 +750,54 @@ class HFDecoderModel(DecoderModel, Tunable):
 
 
     def merge_lora_weights(self):
-        if self.model_args.use_lora:
+        if self.model_args.use_lora and not self.model_args.use_qlora:
+            self.get_backend_model().merge_and_unload()
+        elif self.model_args.use_qlora:
+            logger.warning("Reloading base model in 16-bit precision to merge adapter weights. NOTE: Your device must have"
+                           "sufficient memory to reload the model in half-precision without quantization.")
+            self.get_peft_without_qlora()
             self.get_backend_model().merge_and_unload()
         else:
             logger.warning("LoRA training is NOT enabled. Merging LoRA weights is not applicable.")
 
+    def get_peft_without_qlora(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            print('created temporary directory', tmpdirname)
+
+
+            self.get_backend_model().save_pretrained(tmpdirname)
+
+            torch_dtype = (
+                self.model_args.torch_dtype
+                if self.model_args.torch_dtype in ["auto", None]
+                else getattr(torch, self.model_args.torch_dtype)
+            )
+            config_kwargs = {
+                "cache_dir": self.model_args.cache_dir,
+                "revision": self.model_args.model_revision,
+                "use_auth_token": True if self.model_args.use_auth_token else None,
+            }
+            config = AutoConfig.from_pretrained(self.model_args.model_name_or_path, **config_kwargs)
+            device_map = "auto"
+            if os.environ.get('LOCAL_RANK') is not None:
+                local_rank = int(os.environ.get('LOCAL_RANK','0'))
+                device_map = {'': local_rank}
+
+            self.backend_model_full = AutoModelForCausalLM.from_pretrained(
+                self.model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
+                config=config,
+                cache_dir=self.model_args.cache_dir,
+                revision=self.model_args.model_revision,
+                use_auth_token=True if self.model_args.use_auth_token else None,
+                torch_dtype=torch_dtype,
+                device_map=device_map,
+                trust_remote_code = self.model_args.trust_remote_code,
+            )
+        
+            self.backend_model = PeftModel.from_pretrained(self.backend_model_full, tmpdirname)
 
     def save(self, dir, save_full_model=False, *args, **kwargs):
         """
