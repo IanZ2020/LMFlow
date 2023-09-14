@@ -22,19 +22,17 @@ deepspeed ${deepspeed_args} \
     --dataset_path $3 \
     --output_dir ${output_dir} --overwrite_output_dir \
     --num_train_epochs 1 \
-    --learning_rate 1e-4 \
+    --learning_rate 3e-4 \
     --block_size 2048 \
-    --per_device_train_batch_size 4 \
+    --per_device_train_batch_size 2 \
     --deepspeed configs/ds_config_zero2.json \
     --fp16 \
-    --dataloader_pin_memory False \
     --run_name ${exp_id} \
     --validation_split_percentage 0 \
     --logging_steps 1 \
     --do_train \
     --ddp_timeout 72000 \
     --save_steps 200 \
-    --gradient_checkpointing True \
     --dataloader_num_workers 1 \
     --weight_decay 0.1 \
     --adam_beta1 0.9 \
@@ -44,5 +42,11 @@ deepspeed ${deepspeed_args} \
     --warmup_ratio 0.03 \
     --gradient_accumulation_steps 24 \
     --use_flash_attention True\
+    --use_lora 1 \
+    --lora_r 64 \
+    --save_aggregated_lora 1\
+    --lora_target_modules q_proj v_proj k_proj o_proj up_proj gate_proj down_proj \
+    --lora_dropout 0 \
+    --lora_alpha 100 \
     | tee ${log_dir}/train.log \
     2> ${log_dir}/train.err
