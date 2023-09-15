@@ -366,6 +366,7 @@ class HFDecoderModel(DecoderModel, Tunable):
                     lora_dropout=model_args.lora_dropout,
                     target_modules=lora_target_modules,
                 )
+                model.enable_input_require_grads()
                 model = get_peft_model(model, peft_config)
                 model.print_trainable_parameters()
 
