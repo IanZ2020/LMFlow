@@ -319,7 +319,7 @@ class PrunedLlamaConfig(PretrainedConfig):
         self.from_llama_config(model.config)
         for i, layer in enumerate(model.base_model.layers):
             self.num_attention_heads[i] = layer.self_attn.num_heads
-            self.num_key_value_heads[i] = layer.num_key_value_heads
+            self.num_key_value_heads[i] = layer.self_attn.num_key_value_heads
             self.intermediate_size[i] = layer.mlp.gate_proj.out_features
 
     def _rope_scaling_validation(self):
