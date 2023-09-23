@@ -314,6 +314,8 @@ def main(model_args, data_args, args):
             # modify inferece-related attributes
             for layer in model.model.layers:
                 layer.self_attn.num_heads = layer.self_attn.q_proj.out_features // layer.self_attn.head_dim
+                layer.self_attn.num_key_value_heads = layer.self_attn.num_heads
+                print(layer.self_attn.q_proj.out_features, layer.self_attn.o_proj.in_features, layer.self_attn.num_heads)
             
             #evaluate the model after each step of pruning
             dataset = Dataset(data_args)
@@ -398,6 +400,7 @@ def main(model_args, data_args, args):
     config.from_llama_model(model)
     print('Get config')
     model.config = config
+    model.config.use_cache = True
     if args.save_model:
         print('saving model')
         if is_deepspeed_zero3_enabled():
