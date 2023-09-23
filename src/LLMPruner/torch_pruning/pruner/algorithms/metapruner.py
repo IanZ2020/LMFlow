@@ -337,5 +337,6 @@ class MetaPruner:
                 pruning_indices = pruning_indices[:n_pruned]
             group = self.DG.get_pruning_group(
                 module, pruning_fn, pruning_indices.tolist())
+            #BUG lead to no pruning if a structure is fully pruned
             if self.DG.check_pruning_group(group):
                 yield group
