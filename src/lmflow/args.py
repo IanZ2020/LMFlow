@@ -1064,8 +1064,7 @@ class PrunerArguments():
     pruner_type: str = field(
         default="taylor",
         metadata={
-            "help": "pruner type",
-            "choices": ['random', 'l2', 'l1', 'taylor'],
+            "help": "pruner type"
         },
     )
 

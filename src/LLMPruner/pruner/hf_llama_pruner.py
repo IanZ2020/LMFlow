@@ -371,3 +371,25 @@ class TaylorImportance(tp.importance.Importance):
         if self.normalizer is not None:
             group_imp = self.normalizer(group, group_imp)
         return group_imp
+    
+class WeightedTaylorImportance(TaylorImportance):
+    def __init__(self, layer_weights, model, group_reduction="sum", normalizer=None, taylor=None):
+        super().__init__(group_reduction=group_reduction, normalizer=normalizer, taylor=taylor)
+        self.model = model
+        self.layer_weights = layer_weights
+
+    def __call__(self, group, ch_groups=1, consecutive_groups=1):
+        group_imp = super().__call__(group=group, ch_groups=ch_groups, consecutive_groups=consecutive_groups)
+        module = group._group[0].dep.target.module
+        num_of_layer = self.find_module_location(module)
+        group_imp = group_imp * self.layer_weights[num_of_layer]
+        return group_imp
+    
+    def find_module_location(self, target_module):
+        for name, module in self.model.base_model.named_modules():
+            if module == target_module:
+                path_to_module = name
+                parts = path_to_module.split('.')
+                index_of_layers = parts.index('layers')
+                return int(parts[index_of_layers+1])
+        return None
