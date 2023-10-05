@@ -839,13 +839,32 @@ class InferencerArguments:
         },
     )
 
+
 @dataclass
 class RaftAlignerArguments(TrainingArguments):
     """
     Define a class RaftAlignerArguments to configure raft aligner.
     """
+    save_ranks: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "whether or not to store all the rank data"
+        },
+    )
+    output_rank_path: Optional[str] = field(
+        default="tmp/raft_aligner",
+        metadata={
+            "help": "path to store all the rank data"
+        },
+    )
+    raft_exp_dir: Optional[str] = field(
+        default="output_models/iter_raft_align",
+        metadata={
+            "help": "main directory to run raft experiments"
+        },
+    )
     output_reward_path: Optional[str] = field(
-        default="tmp/raft_aligner/",
+        default="tmp/raft_aligner",
         metadata={
             "help": "The path of output rewards."
         }
@@ -911,6 +930,47 @@ class RaftAlignerArguments(TrainingArguments):
             ),
         },
     )
+    mode: Optional[str] = field(
+        default="xxx",
+        metadata={
+            "help": (
+                "{collection_strategy} is either top or local"
+                " top means that we rank the samples globally regardless of the prompts"
+                " local means that we only rank the samples with the same prompt"
+            ),
+        },
+    )
+    raft_random_seed: Optional[int] = field(
+        default=1,
+        metadata={
+            "help": (
+                "{collection_strategy} is either top or local"
+                " top means that we rank the samples globally regardless of the prompts"
+                " local means that we only rank the samples with the same prompt"
+            ),
+        },
+    )
+    raft_infer_set: Optional[str] = field(
+        default="xxx",
+        metadata={
+            "help": (
+                "{collection_strategy} is either top or local"
+                " top means that we rank the samples globally regardless of the prompts"
+                " local means that we only rank the samples with the same prompt"
+            ),
+        },
+    )
+    raft_filtered_set: Optional[str] = field(
+        default="yyy",
+        metadata={
+            "help": (
+                "{collection_strategy} is either top or local"
+                " top means that we rank the samples globally regardless of the prompts"
+                " local means that we only rank the samples with the same prompt"
+            ),
+        },
+    )
+
 
 @dataclass
 class BenchmarkingArguments:
