@@ -1150,6 +1150,18 @@ class PrunerArguments():
         }
     )
 
+    layer_importance: str = field(
+        default=None, metadata={
+            "help": "Layer importance"
+        }
+    )
+
+    layer_importance_weighting_type: str = field(
+        default='first', metadata={
+            "help": "Layer importance weighting type"
+        }
+    )
+
 
 PIPELINE_ARGUMENT_MAPPING = {
     "finetuner": FinetunerArguments,
