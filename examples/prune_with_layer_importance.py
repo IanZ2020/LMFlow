@@ -99,8 +99,8 @@ def set_random_seed(seed):
 
 def get_layer_prune_ratio(pruning_ratio, layer_importance, layer_importance_weighting_type='linear'):
     layer_importance = np.array(layer_importance)
+    num_of_layers = len(layer_importance)
     if layer_importance_weighting_type == 'linear':
-        num_of_layers = len(layer_importance)
         weight_factor =  (layer_importance.max() - layer_importance)
         weight_factor = weight_factor / weight_factor.mean()
         pruning_ratio_weighted = np.full((num_of_layers), pruning_ratio) * weight_factor
