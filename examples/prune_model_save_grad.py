@@ -86,7 +86,7 @@ def average_gradients(model, second_grad = False):
         dist.all_reduce(param.offload_grad_abs.data, op=dist.ReduceOp.SUM)
         if not dist.is_initialized() or dist.get_rank() == 0:
             param.offload_grad = param.offload_grad.to('cpu')
-            param.offload_grad_abs = param.offload_grad.to('cpu')
+            param.offload_grad_abs = param.offload_grad_abs.to('cpu')
             gradient_info_first[name] = param.offload_grad
             gradient_info_firstabs[name] = param.offload_grad_abs
         # param.acc_grad = param.acc_grad.to(dist.get_rank())
