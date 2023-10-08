@@ -102,8 +102,8 @@ def set_random_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-def get_layer_prune_ratio(pruning_ratio, layer_importance, layer_importance_weighting_type='linear'):
-    layer_importance = np.array(layer_importance)
+def get_layer_prune_ratio(pruning_ratio, layer_importance, layer_importance_weighting_type='linear', start=None, end=None, exp_t=1.):
+    layer_importance = np.array(layer_importance)[start:end]
     num_of_layers = len(layer_importance)
     if layer_importance_weighting_type == 'linear':
         weight_factor =  (layer_importance.max() - layer_importance)
@@ -111,7 +111,7 @@ def get_layer_prune_ratio(pruning_ratio, layer_importance, layer_importance_weig
         pruning_ratio_weighted = np.full((num_of_layers), pruning_ratio) * weight_factor
         return pruning_ratio_weighted
     elif layer_importance_weighting_type == 'exp':
-        layer_importance = np.exp(layer_importance.max()-layer_importance)
+        layer_importance = np.exp((layer_importance.max()-layer_importance)/exp_t)
         weight_factor = layer_importance / layer_importance.mean()
         pruning_ratio_weighted = np.full((num_of_layers), pruning_ratio) * weight_factor
         return pruning_ratio_weighted
@@ -268,10 +268,16 @@ def main(model_args, data_args, args):
         second_grad = False
 
     ###########################
+    if args.block_attention_layer_end-args.block_attention_layer_start >= args.block_mlp_layer_end-args.block_mlp_layer_start:
+        start = args.block_attention_layer_start
+        end = args.block_attention_layer_end
+    else:
+        start = args.block_mlp_layer_start
+        end = args.block_mlp_layer_end
     args.layer_importance = [float(x) for x in args.layer_importance.split(',')]
-    layer_prune_ratio = get_layer_prune_ratio(args.pruning_ratio ,args.layer_importance, args.layer_importance_weighting_type)
+    layer_prune_ratio = get_layer_prune_ratio(args.pruning_ratio ,args.layer_importance, args.layer_importance_weighting_type, start = start, end = end, exp_t=args.exp_t)
     logger.log("Layer Pruning Ratio: {}".format(layer_prune_ratio))
-    ch_sparsity_dict = {model.base_model.layers[i]:layer_prune_ratio[i] for i in range(len(layer_prune_ratio))}
+    ch_sparsity_dict = {model.base_model.layers[start+i]:layer_prune_ratio[i] for i in range(len(layer_prune_ratio))}
     ###########################
 
 
@@ -308,7 +314,7 @@ def main(model_args, data_args, args):
         for i in range(args.iterative_steps):
             if args.grad_info_path is not None and i == 0:
                 get_grad_info(model, args.grad_info_path)
-            if pruner_type in ['taylor']:
+            elif pruner_type in ['taylor']:
                 example_prompts = get_examples(args.pruning_dataset, tokenizer, args.num_examples, seq_len = args.prune_block_size).to(device = local_rank)
                 batch_num = args.num_examples // args.prune_batch_size
                 batch_num_per_device = batch_num // world_size

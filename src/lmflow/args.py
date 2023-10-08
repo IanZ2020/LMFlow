@@ -1227,6 +1227,12 @@ class PrunerArguments():
         }
     )
 
+    exp_t: float = field(
+        default=1., metadata={
+            "help": "temp for layer importance reweighting pruning"
+        }
+    )
+
 
 PIPELINE_ARGUMENT_MAPPING = {
     "finetuner": FinetunerArguments,
