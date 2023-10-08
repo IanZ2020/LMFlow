@@ -1221,6 +1221,12 @@ class PrunerArguments():
         }
     )
 
+    grad_info_path: str = field(
+        default=None, metadata={
+            "help": "Path to grad info"
+        }
+    )
+
 
 PIPELINE_ARGUMENT_MAPPING = {
     "finetuner": FinetunerArguments,

@@ -58,6 +58,11 @@ try:
 except:
     pass
 
+def get_grad_info(model, path_to_grad):
+    grad_info = torch.load(path_to_grad, map_location='cpu')
+    for name, param in model.named_parameters():
+        param.offload_grad = grad_info[name]
+
 def acc_grad(model, firstabs = False, second_grad = False):
     for param in model.parameters():
         if hasattr(param, 'offload_grad') and param.offload_grad is not None:
@@ -281,6 +286,8 @@ def main(model_args, data_args, args):
         ds_engine.module.train()
         logger.log("Start Pruning")
         for i in range(args.iterative_steps):
+            if args.grad_info_path is not None and i == 0:
+                get_grad_info(model, args.grad_info_path)
             if 'taylor' in pruner_type:
                 example_prompts = get_examples(args.pruning_dataset, tokenizer, args.num_examples, seq_len = args.prune_block_size).to(device = local_rank)
                 batch_num = args.num_examples // args.prune_batch_size

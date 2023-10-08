@@ -58,43 +58,51 @@ try:
 except:
     pass
 
-def get_grad_info(model, path_to_grad):
-    grad_info = torch.load(path_to_grad, map_location='cpu')
-    for name, param in model.named_parameters():
-        param.offload_grad = grad_info[name]
-
 def acc_grad(model, firstabs = False, second_grad = False):
     for param in model.parameters():
         if hasattr(param, 'offload_grad') and param.offload_grad is not None:
-            if firstabs:
-                param.offload_grad += param.grad.data.detach().to('cpu').abs()
-            else:
-                param.offload_grad += param.grad.data.detach().to('cpu')
+            param.offload_grad_abs += param.grad.data.detach().to('cpu').abs()
+            param.offload_grad += param.grad.data.detach().to('cpu')
         else:
-            if firstabs:
-                param.offload_grad = param.grad.data.detach().to('cpu').abs()
-            else:
-                param.offload_grad = param.grad.data.detach().to('cpu')
-        if second_grad:
-            if hasattr(param, 'acc_grad') and param.acc_grad is not None:
-                param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
-            else:
-                param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
+            param.offload_grad_abs = param.grad.data.detach().to('cpu').abs()
+            param.offload_grad = param.grad.data.detach().to('cpu')
+        # if hasattr(param, 'acc_grad') and param.acc_grad is not None:
+        #     param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
+        # else:
+        #     param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
+
         param.grad = None
         torch.cuda.empty_cache()
 
 def average_gradients(model, second_grad = False):
     size = float(dist.get_world_size())
-    for param in model.parameters():
+    gradient_info_first = {}
+    gradient_info_second = {}
+    gradient_info_firstabs = {}
+    for name, param in model.named_parameters():
         param.offload_grad = param.offload_grad.to(dist.get_rank())
         dist.all_reduce(param.offload_grad.data, op=dist.ReduceOp.SUM)
-        param.offload_grad = param.offload_grad.to('cpu')
+        param.offload_grad_abs = param.offload_grad_abs.to(dist.get_rank())
+        dist.all_reduce(param.offload_grad_abs.data, op=dist.ReduceOp.SUM)
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            param.offload_grad = param.offload_grad.to('cpu')
+            param.offload_grad_abs = param.offload_grad.to('cpu')
+            gradient_info_first[name] = param.offload_grad
+            gradient_info_firstabs[name] = param.offload_grad_abs
+        # param.acc_grad = param.acc_grad.to(dist.get_rank())
+        # dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
+        # if not dist.is_initialized() or dist.get_rank() == 0:
+        #     param.acc_grad = param.acc_grad.to('cpu')
+        #     gradient_info_second[name] = param.acc_grad
         torch.cuda.empty_cache()
-        if second_grad:
-            param.acc_grad = param.acc_grad.to(dist.get_rank())
-            dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
-            param.acc_grad = param.acc_grad.to('cpu')
-        torch.cuda.empty_cache()
+
+        param.offload_grad = None
+        param.offload_grad_abs = None
+        # param.acc_grad = None
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        torch.save(gradient_info_first, 'grad_info/13b_first_grad_info.bin')
+        torch.save(gradient_info_firstabs, 'grad_info/13b_firstabs_grad_info.bin')
+        # torch.save(gradient_info_second, 'grad_info/13b_second_grad_info.bin')
 
 def set_random_seed(seed):
     random.seed(seed)
@@ -282,9 +290,7 @@ def main(model_args, data_args, args):
         ds_engine.module.train()
         logger.log("Start Pruning")
         for i in range(args.iterative_steps):
-            if args.grad_info_path is not None and i == 0:
-                get_grad_info(model, args.grad_info_path)
-            elif pruner_type in ['taylor']:
+            if pruner_type in ['taylor']:
                 example_prompts = get_examples(args.pruning_dataset, tokenizer, args.num_examples, seq_len = args.prune_block_size).to(device = local_rank)
                 batch_num = args.num_examples // args.prune_batch_size
                 batch_num_per_device = batch_num // world_size
