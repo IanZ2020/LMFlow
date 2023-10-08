@@ -228,7 +228,6 @@ def main(model_args, data_args, args):
         before_pruning_parameters = sum(p.ds_numel for p in model.parameters() if p.requires_grad)
     else:
         before_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    
     forward_prompts = torch.tensor([
         [    1,   306,  4658,   278,  6593,   310,  2834,   338],
         [    1,  3439, 17632,  1925, 29892,   278,  6368,   310],
@@ -241,6 +240,8 @@ def main(model_args, data_args, args):
         imp = llama_pruner.MagnitudeImportance(p=2)
     elif pruner_type == 'taylor':
         imp = llama_pruner.TaylorImportance(group_reduction=args.grouping_strategy, taylor=args.taylor)
+    elif pruner_type == 'weighted_taylor':
+        imp = llama_pruner.WeightedTaylorImportance(group_reduction=args.grouping_strategy, taylor=args.taylor, layer_weights=[float(x) for x in args.layer_importance.split(',')], model = model)
     else:
         raise NotImplementedError
 
