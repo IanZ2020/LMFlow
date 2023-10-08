@@ -253,7 +253,7 @@ class MetaPruner:
                 if self.round_to:
                     n_pruned = n_pruned - (n_pruned % self.round_to)
                     
-                if n_pruned <= 0:
+                if n_pruned // consecutive_groups <= 0:
                     continue
 
                 if ch_groups > 1:
