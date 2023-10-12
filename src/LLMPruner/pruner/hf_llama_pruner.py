@@ -3,7 +3,7 @@ import torch.nn as nn
 
 import LLMPruner.torch_pruning as tp
 from LLMPruner.torch_pruning import BasePruningFunc, ops
-
+import numpy as np
 from copy import deepcopy
 import random
 from functools import reduce
@@ -373,10 +373,10 @@ class TaylorImportance(tp.importance.Importance):
         return group_imp
     
 class WeightedTaylorImportance(TaylorImportance):
-    def __init__(self, layer_weights, model, group_reduction="sum", normalizer=None, taylor=None):
+    def __init__(self, layer_weights, model, group_reduction="sum", normalizer=None, taylor=None, exp_t=1.0):
         super().__init__(group_reduction=group_reduction, normalizer=normalizer, taylor=taylor)
         self.model = model
-        self.layer_weights = layer_weights
+        self.layer_weights = np.exp(np.array(layer_weights)/exp_t)
 
     def __call__(self, group, ch_groups=1, consecutive_groups=1):
         group_imp = super().__call__(group=group, ch_groups=ch_groups, consecutive_groups=consecutive_groups)
