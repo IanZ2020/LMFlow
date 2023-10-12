@@ -241,7 +241,7 @@ def main(model_args, data_args, args):
     elif pruner_type == 'taylor':
         imp = llama_pruner.TaylorImportance(group_reduction=args.grouping_strategy, taylor=args.taylor)
     elif pruner_type == 'weighted_taylor':
-        imp = llama_pruner.WeightedTaylorImportance(group_reduction=args.grouping_strategy, taylor=args.taylor, layer_weights=[float(x) for x in args.layer_importance.split(',')], model = model)
+        imp = llama_pruner.WeightedTaylorImportance(group_reduction=args.grouping_strategy, taylor=args.taylor, layer_weights=[float(x) for x in args.layer_importance.split(',')], model = model, exp_t = args.exp_t)
     else:
         raise NotImplementedError
 
