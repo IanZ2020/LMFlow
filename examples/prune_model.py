@@ -58,10 +58,13 @@ try:
 except:
     pass
 
-def get_grad_info(model, path_to_grad):
+def get_grad_info(model, path_to_grad, taylor):
     grad_info = torch.load(path_to_grad, map_location='cpu')
     for name, param in model.named_parameters():
-        param.offload_grad = grad_info[name]
+        if 'second' in taylor:
+            param.acc_grad = grad_info[name]
+        else:
+            param.offload_grad = grad_info[name]
 
 def acc_grad(model, firstabs = False, second_grad = False):
     for param in model.parameters():
@@ -284,7 +287,7 @@ def main(model_args, data_args, args):
         logger.log("Start Pruning")
         for i in range(args.iterative_steps):
             if args.grad_info_path is not None and i == 0:
-                get_grad_info(model, args.grad_info_path)
+                get_grad_info(model, args.grad_info_path,args.taylor)
             elif pruner_type in ['taylor']:
                 example_prompts = get_examples(args.pruning_dataset, tokenizer, args.num_examples, seq_len = args.prune_block_size).to(device = local_rank)
                 batch_num = args.num_examples // args.prune_batch_size
