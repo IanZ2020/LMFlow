@@ -12,7 +12,7 @@ class AutoModel:
     @classmethod
     def get_model(self, model_args, *args, **kwargs):
         arch_type = model_args.arch_type
-        if arch_type in ["decoder_only", "pruned_decoder_only"]:
+        if arch_type in ["decoder_only", "pruned_decoder_only", "my_llama"]:
             return HFDecoderModel(model_args, *args, **kwargs)
         # if arch_type == "pruned_decoder_only":
         #     return HFPrunedDecoderModel(model_args, *args, **kwargs)

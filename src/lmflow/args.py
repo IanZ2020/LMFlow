@@ -128,7 +128,7 @@ class ModelArguments:
                 "Model architecture type, e.g. \"decoder_only\","
                 " \"encoder_decoder\""
             ),
-            "choices": ["decoder_only", "encoder_decoder", "text_regression", "vision_encoder_decoder", "pruned_decoder_only"],
+            "choices": ["decoder_only", "encoder_decoder", "text_regression", "vision_encoder_decoder", "pruned_decoder_only","my_llama"],
         },
     )
     config_name: Optional[str] = field(

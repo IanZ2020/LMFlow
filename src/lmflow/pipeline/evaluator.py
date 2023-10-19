@@ -385,7 +385,13 @@ class Evaluator(BasePipeline):
         if data_dict['type'] == 'text2text':
             raise NotImplementedError("ppl evaluation is currently not supported for text2text dataset, please use text_only dataset.")
         texts = [ instance["text"] for instance in data_dict["instances"] ]
-        encodings = model.get_tokenizer()("\n\n".join(texts), return_tensors="pt")
+        encodings = []
+        print('Running tokenization')
+        for text in texts:
+            encodings.append(model.get_tokenizer()(text, return_tensors="pt")['input_ids'])
+        encodings = torch.cat(encodings,dim=1)
+
+        print('Finished tokenization')
         # Define some constant
         try:
             max_length = min(model.get_backend_model().config.n_positions, model.get_max_length())
@@ -394,8 +400,10 @@ class Evaluator(BasePipeline):
 
         if verbose:
             print(f"The maximum sequence length : {max_length}")
-        encode_batch_num = encodings.input_ids.size(0)
-        seq_len = encodings.input_ids.size(1)
+        encode_batch_num = encodings.shape[0]
+        
+        seq_len = encodings.shape[1]
+        print(f"The total token count : {seq_len}")
 
         def cat_sim(hidden_states):
             cos = nn.CosineSimilarity(dim=-1, eps=1e-8)
@@ -409,13 +417,18 @@ class Evaluator(BasePipeline):
 
         def mean_sim(hidden_states):
             cos = nn.CosineSimilarity(dim=-1, eps=1e-8)
-            sim = []
+            sim_for_attn = []
+            sim_for_ffn = []
+            sim_for_layer = []
             with torch.no_grad():
                 for i in range(len(model.get_backend_model().base_model.layers)):
-                    input = hidden_states[i]
-                    output = hidden_states[i+1]
-                    sim.append(cos(input,output))
-            return torch.stack(sim).mean(dim=-1).mean(dim=-1)
+                    input = hidden_states[2*i]
+                    after_attn = hidden_states[2*i+1]
+                    output = hidden_states[2*i+2]
+                    sim_for_attn.append(cos(input,after_attn))
+                    sim_for_ffn.append(cos(after_attn,output))
+                    sim_for_layer.append(cos(input,output))
+            return torch.stack(sim_for_attn).mean(dim=-1).mean(dim=-1), torch.stack(sim_for_ffn).mean(dim=-1).mean(dim=-1), torch.stack(sim_for_layer).mean(dim=-1).mean(dim=-1) 
 
         def l2_error(hidden_states):
             sim = []
@@ -446,15 +459,12 @@ class Evaluator(BasePipeline):
                     ratio.append((output_norm/input_norm).mean(dim=-1))
             return torch.stack(ratio).mean(dim=-1)
         
-        cat_sim_results = []
-        mean_sim_results = []
-        l2_error_results = []
-        l2_error_norm_results = []
-        l2_error_norm_sep_results = []
-        output_norm_ratio_results = []
+        mean_sim_results_for_attn = []
+        mean_sim_results_for_ffn = []
+        mean_sim_results_for_layer = []
 
         len_per_device = seq_len // self.world_size
-        current_batch = encodings.input_ids[:, self.local_rank*len_per_device:(self.local_rank+1)*len_per_device]
+        current_batch = encodings[:, self.local_rank*len_per_device:(self.local_rank+1)*len_per_device]
 
         num_of_example = len_per_device // self.block_size
         num_of_batch = num_of_example // self.batch_size * encode_batch_num
@@ -466,51 +476,51 @@ class Evaluator(BasePipeline):
             input_ids = current_batch[id].to(device=self.local_rank)
 
             with torch.no_grad():
-                outputs = model.get_backend_model().base_model.forward(input_ids,output_hidden_states=True)
+                outputs = model.get_backend_model().base_model.forward(input_ids,output_hidden_states=True, output_hidden_states_after_attn=True)
                 # loss is calculated using CrossEntropyLoss which averages over valid labels
                 # N.B. the model only calculates loss over trg_len - 1 labels, because it internally shifts the labels
                 # to the left by 1.
                 hidden_states = outputs.hidden_states
 
-            cat_sim_results.append(cat_sim(hidden_states))
-            mean_sim_results.append(mean_sim(hidden_states))
-            l2_error_results.append(l2_error(hidden_states)[0])
-            l2_error_norm_results.append(l2_error(hidden_states)[1])
-            l2_error_norm_sep_results.append(l2_error(hidden_states)[2])
-            output_norm_ratio_results.append(norm_ratio(hidden_states))
+            # cat_sim_results.append(cat_sim(hidden_states))
+            r = mean_sim(hidden_states)
+            mean_sim_results_for_attn.append(r[0])
+            mean_sim_results_for_ffn.append(r[1])
+            mean_sim_results_for_layer.append(r[2])
+            # l2_error_results.append(l2_error(hidden_states)[0])
+            # l2_error_norm_results.append(l2_error(hidden_states)[1])
+            # l2_error_norm_sep_results.append(l2_error(hidden_states)[2])
+            # output_norm_ratio_results.append(norm_ratio(hidden_states))
             count += 1
             print(f"rank{self.local_rank}: {count}/{num_of_batch}") 
         
-        cat_sim_results = torch.stack(cat_sim_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
-        mean_sim_results = torch.stack(mean_sim_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
-        l2_error_results = torch.stack(l2_error_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
-        l2_error_norm_results = torch.stack(l2_error_norm_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
-        l2_error_norm_sep_results = torch.stack(l2_error_norm_sep_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
-        output_norm_ratio_results = torch.stack(output_norm_ratio_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # cat_sim_results = torch.stack(cat_sim_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        mean_sim_results_for_attn = torch.stack(mean_sim_results_for_attn).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        mean_sim_results_for_ffn = torch.stack(mean_sim_results_for_ffn).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        mean_sim_results_for_layer = torch.stack(mean_sim_results_for_layer).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # l2_error_results = torch.stack(l2_error_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # l2_error_norm_results = torch.stack(l2_error_norm_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # l2_error_norm_sep_results = torch.stack(l2_error_norm_sep_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # output_norm_ratio_results = torch.stack(output_norm_ratio_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
         # print(f"rank{self.local_rank}:\nCat_Sim for All Layers{cat_sim_results.mean(dim=-1)}\nMean_Sim for All Layers{mean_sim_results.mean(dim=-1)}")
 
-        all_process = torch.stack([cat_sim_results.mean(dim=-1), mean_sim_results.mean(dim=-1), l2_error_results.mean(dim=-1),l2_error_norm_results.mean(dim=-1),l2_error_norm_sep_results.mean(dim=-1),output_norm_ratio_results.mean(dim=-1)])
+        all_process = torch.stack([mean_sim_results_for_attn.mean(dim=-1), mean_sim_results_for_ffn.mean(dim=-1), mean_sim_results_for_layer.mean(dim=-1)])
 
         dist.all_reduce(all_process, dist.ReduceOp.SUM, async_op=False)
         result = all_process
         
-        cat_sim_results = result[0] / self.world_size
-        mean_sim_results = result[1] / self.world_size
-        l2_error_results = result[2] / self.world_size
-        l2_error_norm_results = result[3] / self.world_size
-        l2_error_norm_sep_results = result[4] / self.world_size
-        output_norm_ratio_results = result[5] / self.world_size
+        mean_sim_results_for_attn = result[0] / self.world_size
+        mean_sim_results_for_ffn = result[1] / self.world_size
+        mean_sim_results_for_layer = result[2] / self.world_size
         
 
         if not dist.is_initialized() or dist.get_rank() == 0:
-            print(f"rank{self.local_rank}:\nCat_Sim for All Layers{cat_sim_results}, Rank between layers: {cat_sim_results.argsort(dim=-1)}\nMean_Sim for All Layers{mean_sim_results}, Rank between layers: {mean_sim_results.argsort(dim=-1)}\nl2_error for All Layers{l2_error_results}, Rank between layers: {l2_error_results.argsort(dim=-1)}")
-            with open('/home/zhangyihan/projects/LMFlow/output_models/eval_results.txt', 'a') as f:
+            with open('/home/zhangyihan/LMFlow/output_models/eval_results.txt', 'a') as f:
                 f.write(f'model_name_or_path: {self.model_args.model_name_or_path}, dataset_path: {self.data_args.dataset_path}, block_size: {self.evaluator_args.evaluate_block_size}, metric:{self.evaluator_args.metric}')
-                f.write(f"\nCat_Sim for All Layers{cat_sim_results}, Rank between layers: {cat_sim_results.argsort(dim=-1)}\nMean_Sim for All Layers{mean_sim_results}, Rank between layers: {mean_sim_results.argsort(dim=-1)}\nl2_error for All Layers{l2_error_results}, Rank between layers: {l2_error_results.argsort(dim=-1)}\n")
-                f.write(f"\nl2_error_norm for All Layers{l2_error_norm_results}\nl2_error_sep_norm for All Layers{l2_error_norm_sep_results}\n")
-                f.write(f"\noutput_ratio for All Layers{output_norm_ratio_results}")
+                f.write(f"\nMean_Sim for All Layers attn{mean_sim_results_for_attn}, Rank between layers: {mean_sim_results_for_attn.argsort(dim=-1)}\nMean_Sim for All Layers ffn{mean_sim_results_for_ffn}, Rank between layers: {mean_sim_results_for_ffn.argsort(dim=-1)}\nMean_Sim for All Layers{mean_sim_results_for_layer}, Rank between layers: {mean_sim_results_for_layer.argsort(dim=-1)}\n")
+                
                 f.write("\n******************************\n")
-        return cat_sim_results, mean_sim_results, l2_error_results
+        return mean_sim_results_for_attn, mean_sim_results_for_ffn, mean_sim_results_for_layer
 
     def _evaluate_layer_attn_importance(self, model, dataset: Dataset, verbose=True):
         data_dict = dataset.to_dict()

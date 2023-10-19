@@ -53,7 +53,8 @@ from transformers import (
 
 from LLMPruner.models.hf_llama import (
     PrunedLlamaForCausalLM, 
-    PrunedLlamaConfig
+    PrunedLlamaConfig,
+    LlamaForCausalLM
 )
 
 
@@ -396,6 +397,16 @@ class HFDecoderModel(DecoderModel, Tunable):
                             torch_dtype=torch_dtype,
                             load_in_8bit = model_args.use_int8
                         )
+                elif model_args.arch_type == 'my_llama':
+                    self.backend_model = LlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            device_map="auto",
+                            offload_folder="offload",
+                            offload_state_dict=True,
+                            torch_dtype=torch_dtype,
+                            load_in_8bit = model_args.use_int8
+                        )
                 else:
                     self.backend_model = AutoModelForCausalLM.from_pretrained(
                             model_args.model_name_or_path,
@@ -435,6 +446,15 @@ class HFDecoderModel(DecoderModel, Tunable):
                             offload_state_dict=True,
                             torch_dtype=torch_dtype,
                         )
+                        elif model_args.arch_type == 'my_llama':
+                            self.backend_model = LlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            device_map="auto",
+                            offload_folder="offload",
+                            offload_state_dict=True,
+                            torch_dtype=torch_dtype,
+                        )
                         else:
                             self.backend_model = AutoModelForCausalLM.from_pretrained(
                                 model_args.model_name_or_path,
@@ -456,6 +476,12 @@ class HFDecoderModel(DecoderModel, Tunable):
                                 config=config,
                                 torch_dtype=torch_dtype,
                             )
+                        elif model_args.arch_type == 'my_llama':
+                            self.backend_model = LlamaForCausalLM.from_pretrained(
+                                model_args.model_name_or_path,
+                                config=config,
+                                torch_dtype=torch_dtype,
+                            )
                         else:
                             self.backend_model = AutoModelForCausalLM.from_pretrained(
                                 model_args.model_name_or_path,
@@ -470,6 +496,12 @@ class HFDecoderModel(DecoderModel, Tunable):
                         )
                     if model_args.arch_type == 'pruned_decoder_only':
                         self.backend_model = PrunedLlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            torch_dtype=torch_dtype,
+                        )
+                    elif model_args.arch_type == 'my_llama':
+                        self.backend_model = LlamaForCausalLM.from_pretrained(
                             model_args.model_name_or_path,
                             config=config,
                             torch_dtype=torch_dtype,
