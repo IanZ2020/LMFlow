@@ -54,7 +54,8 @@ from transformers import (
 from LLMPruner.models.hf_llama import (
     PrunedLlamaForCausalLM, 
     PrunedLlamaConfig,
-    LlamaForCausalLM
+    LlamaForCausalLM,
+    LlamaConfig
 )
 
 
