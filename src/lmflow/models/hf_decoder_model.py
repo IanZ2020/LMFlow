@@ -204,6 +204,8 @@ class HFDecoderModel(DecoderModel, Tunable):
         elif model_args.model_name_or_path:
             if model_args.arch_type =='pruned_decoder_only':
                 config = PrunedLlamaConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+            elif model_args.arch_type =='my_llama':
+                config = LlamaConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
             else:
                 config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
         else:
