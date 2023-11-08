@@ -393,7 +393,6 @@ class LlamaAttention(nn.Module):
             attn_output = torch.zeros_like(hidden_states)
             attn_weights = None
             past_key_value = None
-            return 
         return attn_output, attn_weights, past_key_value
 
 
