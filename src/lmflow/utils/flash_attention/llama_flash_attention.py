@@ -31,6 +31,8 @@ def forward(
 
     attention_mask: [bsz, q_len]
     """
+    if self.num_heads == 0:
+        return torch.zeros_like(hidden_states), None, None
     bsz, q_len, _ = hidden_states.size()
 
     query_states = (
