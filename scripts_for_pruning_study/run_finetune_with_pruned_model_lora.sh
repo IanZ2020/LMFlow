@@ -8,7 +8,7 @@ if [ $# -ge 1 ]; then
   deepspeed_args="$1"
 fi
 
-exp_id=pruning_study_pretraining_red_lr1e-4/$2
+exp_id=pruning_study_pretraining_wiki_lr3e-4/$2
 project_dir=$(cd "$(dirname $0)"/..; pwd)
 output_dir=${project_dir}/output_models/${exp_id}
 log_dir=${project_dir}/log/${exp_id}
@@ -24,15 +24,16 @@ deepspeed ${deepspeed_args} \
     --num_train_epochs 1 \
     --learning_rate 3e-4 \
     --block_size 2048 \
-    --per_device_train_batch_size 2 \
-    --deepspeed configs/ds_config_zero2.json \
+    --per_device_train_batch_size 16 \
+    --deepspeed configs/ds_config_zero3.json \
     --fp16 \
     --run_name ${exp_id} \
     --validation_split_percentage 0 \
+    --gradient_checkpointing True \
     --logging_steps 1 \
     --do_train \
     --ddp_timeout 72000 \
-    --save_steps 200 \
+    --save_steps 100 \
     --dataloader_num_workers 1 \
     --weight_decay 0.1 \
     --adam_beta1 0.9 \
@@ -40,7 +41,7 @@ deepspeed ${deepspeed_args} \
     --adam_epsilon 1e-5 \
     --lr_scheduler_type cosine \
     --warmup_ratio 0.03 \
-    --gradient_accumulation_steps 24 \
+    --gradient_accumulation_steps 4 \
     --use_flash_attention True\
     --use_lora 1 \
     --lora_r 64 \

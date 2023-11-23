@@ -183,3 +183,5 @@ tags
 lm_cache/
 
 prune_log/
+
+raft_output/

@@ -324,9 +324,10 @@ def main(model_args, data_args, args):
         
             # modify inferece-related attributes
             for layer in model.model.layers:
-                layer.self_attn.num_heads = layer.self_attn.q_proj.out_features // layer.self_attn.head_dim
+                layer.self_attn.num_heads = layer.self_attn.q_proj.out_features // layer.self_attn.head_dim if hasattr(layer.self_attn, 'q_proj') else 0
                 layer.self_attn.num_key_value_heads = layer.self_attn.num_heads
-                print(layer.self_attn.q_proj.out_features, layer.self_attn.o_proj.in_features, layer.self_attn.num_heads)
+                layer.mlp.intermediate_size = layer.mlp.up_proj.out_features if hasattr(layer.mlp, 'up_proj') else 0
+                
             
             #evaluate the model after each step of pruning
             dataset = Dataset(data_args)

@@ -327,7 +327,9 @@ class Evaluator(BasePipeline):
         if data_dict['type'] == 'text2text':
             raise NotImplementedError("ppl evaluation is currently not supported for text2text dataset, please use text_only dataset.")
         texts = [ instance["text"] for instance in data_dict["instances"] ]
+        print('Running tokenization')
         encodings = model.get_tokenizer()("\n\n".join(texts), return_tensors="pt")
+        print('Finished tokenization')
         # # Define some constant
         # if self.model_args.truncate_to_model_max_length:
         #     try:
@@ -422,9 +424,9 @@ class Evaluator(BasePipeline):
             sim_for_layer = []
             with torch.no_grad():
                 for i in range(len(model.get_backend_model().base_model.layers)):
-                    input = hidden_states[2*i]
-                    after_attn = hidden_states[2*i+1]
-                    output = hidden_states[2*i+2]
+                    input = hidden_states[2*i].to(torch.float32)
+                    after_attn = hidden_states[2*i+1].to(torch.float32)
+                    output = hidden_states[2*i+2].to(torch.float32)
                     sim_for_attn.append(cos(input,after_attn))
                     sim_for_ffn.append(cos(after_attn,output))
                     sim_for_layer.append(cos(input,output))

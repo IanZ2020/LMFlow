@@ -60,18 +60,20 @@ except:
 
 def acc_grad(model, firstabs = False, second_grad = False):
     for param in model.parameters():
-        if hasattr(param, 'offload_grad') and param.offload_grad is not None:
-            param.offload_grad_abs += param.grad.data.detach().to('cpu').abs()
-            param.offload_grad += param.grad.data.detach().to('cpu')
+        grad = param.grad.data.detach().to(dtype = torch.float32, device = 'cpu')
+        param.grad = None
+        if hasattr(param, 'offload_grad_abs') and param.offload_grad_abs is not None:
+            param.offload_grad_abs += grad.abs().to(dtype = torch.float16, device = 'cpu')
+            param.offload_grad += grad.detach().to(dtype = torch.float16, device = 'cpu')
+            param.acc_grad += (grad * grad).detach().to('cpu')
         else:
-            param.offload_grad_abs = param.grad.data.detach().to('cpu').abs()
-            param.offload_grad = param.grad.data.detach().to('cpu')
+            param.offload_grad_abs = grad.abs().to(dtype = torch.float16, device = 'cpu')
+            param.offload_grad = grad.detach().to(dtype = torch.float16, device = 'cpu')
+            param.acc_grad = (grad * grad).detach().to('cpu')
         # if hasattr(param, 'acc_grad') and param.acc_grad is not None:
         #     param.acc_grad += (param.grad.data * param.grad.data).detach().to('cpu')
         # else:
         #     param.acc_grad = (param.grad.data * param.grad.data).detach().to('cpu')
-
-        param.grad = None
         torch.cuda.empty_cache()
 
 def average_gradients(model, second_grad = False):
@@ -82,13 +84,17 @@ def average_gradients(model, second_grad = False):
     for name, param in model.named_parameters():
         param.offload_grad = param.offload_grad.to(dist.get_rank())
         dist.all_reduce(param.offload_grad.data, op=dist.ReduceOp.SUM)
-        param.offload_grad_abs = param.offload_grad_abs.to(dist.get_rank())
+        param.offload_grad_abs = param.offload_grad_abs.to(device = dist.get_rank(),dtype = torch.float16)
         dist.all_reduce(param.offload_grad_abs.data, op=dist.ReduceOp.SUM)
+        param.acc_grad = param.acc_grad.to(device = dist.get_rank(),dtype = torch.float16)
+        dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
         if not dist.is_initialized() or dist.get_rank() == 0:
             param.offload_grad = param.offload_grad.to('cpu')
+            param.acc_grad = param.acc_grad.to('cpu')
             param.offload_grad_abs = param.offload_grad_abs.to('cpu')
             gradient_info_first[name] = param.offload_grad
             gradient_info_firstabs[name] = param.offload_grad_abs
+            gradient_info_second[name] = param.acc_grad
         # param.acc_grad = param.acc_grad.to(dist.get_rank())
         # dist.all_reduce(param.acc_grad.data, op=dist.ReduceOp.SUM)
         # if not dist.is_initialized() or dist.get_rank() == 0:
@@ -98,11 +104,12 @@ def average_gradients(model, second_grad = False):
 
         param.offload_grad = None
         param.offload_grad_abs = None
-        # param.acc_grad = None
+        param.acc_grad = None
+
     if not dist.is_initialized() or dist.get_rank() == 0:
-        torch.save(gradient_info_first, 'grad_info/13b_first_grad_info.bin')
-        torch.save(gradient_info_firstabs, 'grad_info/13b_firstabs_grad_info.bin')
-        # torch.save(gradient_info_second, 'grad_info/13b_second_grad_info.bin')
+        torch.save(gradient_info_first, 'grad_info/7b_first_grad_info.bin')
+        torch.save(gradient_info_second, 'grad_info/7b_second_grad_info.bin')
+        torch.save(gradient_info_firstabs, 'grad_info/7b_firstabs_grad_info.bin')
 
 def set_random_seed(seed):
     random.seed(seed)

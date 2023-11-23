@@ -410,14 +410,14 @@ class DependencyGraph(object):
                 prunable_chs = self.get_out_channels(
                     dep.target.module)
                 if prunable_chs is None: continue
-                if prunable_chs <= len(idxs):
+                if prunable_chs < len(idxs):
                     return False
 
             if self.is_in_channel_pruning_fn(dep.handler):
                 prunable_in_chs = self.get_in_channels(
                     dep.target.module)
                 if prunable_in_chs is None: continue
-                if prunable_in_chs <= len(idxs):
+                if prunable_in_chs < len(idxs):
                     return False
         return True
 

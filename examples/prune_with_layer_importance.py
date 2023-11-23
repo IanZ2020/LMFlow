@@ -235,21 +235,21 @@ def main(model_args, data_args, args):
     if args.test_before_train:
         logger.log("\n==================Generation Results before Pruning================\n")
         ds_engine.module.eval()
-        with torch.no_grad():
-            for prompt in prompts:
-                input_ids = tokenizer(prompt, return_tensors="pt")['input_ids'].to(local_rank)
+        # with torch.no_grad():
+        #     for prompt in prompts:
+        #         input_ids = tokenizer(prompt, return_tensors="pt")['input_ids'].to(local_rank)
 
-                generation_output = model.generate(
-                    input_ids=input_ids,
-                    do_sample=True,
-                    top_k=50,
-                    max_length=args.max_seq_len,
-                    top_p=args.top_p,
-                    temperature=args.temperature,
-                )
+        #         generation_output = model.generate(
+        #             input_ids=input_ids,
+        #             do_sample=True,
+        #             top_k=50,
+        #             max_length=args.max_seq_len,
+        #             top_p=args.top_p,
+        #             temperature=args.temperature,
+        #         )
                 
-                result = tokenizer.decode(generation_output[0])
-                logger.log(result)
+        #         result = tokenizer.decode(generation_output[0])
+        #         logger.log(result)
 
         ppl = evaluate_ppl(ds_engine.module, tokenizer, dataset = Dataset(data_args), block_size = data_args.block_size)
         logger.log("PPL before pruning: {}".format(ppl))
@@ -369,9 +369,9 @@ def main(model_args, data_args, args):
         
             # modify inferece-related attributes
             for layer in model.model.layers:
-                layer.self_attn.num_heads = layer.self_attn.q_proj.out_features // layer.self_attn.head_dim
+                layer.self_attn.num_heads = layer.self_attn.q_proj.out_features // layer.self_attn.head_dim if hasattr(layer.self_attn, 'q_proj') else 0
                 layer.self_attn.num_key_value_heads = layer.self_attn.num_heads
-                print(layer.self_attn.q_proj.out_features, layer.self_attn.o_proj.in_features, layer.self_attn.num_heads)
+                layer.mlp.intermediate_size = layer.mlp.up_proj.out_features if hasattr(layer.mlp, 'up_proj') else 0
             
             #evaluate the model after each step of pruning
             dataset = Dataset(data_args)
