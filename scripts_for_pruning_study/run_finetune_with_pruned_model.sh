@@ -25,7 +25,7 @@ deepspeed ${deepspeed_args} \
     --num_train_epochs 1 \
     --learning_rate 1e-4 \
     --block_size 2048 \
-    --per_device_train_batch_size 16 \
+    --per_device_train_batch_size 24 \
     --deepspeed configs/ds_config_zero3.json \
     --bf16 \
     --dataloader_pin_memory False \
@@ -34,7 +34,7 @@ deepspeed ${deepspeed_args} \
     --logging_steps 1 \
     --do_train \
     --ddp_timeout 72000 \
-    --save_steps 200 \
+    --save_steps 50 \
     --gradient_checkpointing True \
     --dataloader_num_workers 1 \
     --weight_decay 0.1 \
@@ -43,7 +43,7 @@ deepspeed ${deepspeed_args} \
     --adam_epsilon 1e-5 \
     --lr_scheduler_type cosine \
     --warmup_ratio 0.03 \
-    --gradient_accumulation_steps 6 \
+    --gradient_accumulation_steps 8 \
     --use_flash_attention True\
     | tee ${log_dir}/train.log \
     2> ${log_dir}/train.err
