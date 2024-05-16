@@ -78,7 +78,14 @@ class ModelArguments:
     use_int8 : bool
         a boolean indicating whether to load int8 quantization for inference.
     """
-
+    max_shard_size: str = field(
+        default="5GB",
+        metadata={
+            "help": (
+                "The model checkpoint for weights initialization.Don't set if you want to train a model from scratch."
+            )
+        },
+    )
     model_name_or_path: Optional[str] = field(
         default=None,
         metadata={
@@ -121,7 +128,7 @@ class ModelArguments:
                 "Model architecture type, e.g. \"decoder_only\","
                 " \"encoder_decoder\""
             ),
-            "choices": ["decoder_only", "encoder_decoder", "text_regression", "vision_encoder_decoder"],
+            "choices": ["decoder_only", "encoder_decoder", "text_regression", "vision_encoder_decoder", "pruned_decoder_only","my_llama"],
         },
     )
     config_name: Optional[str] = field(
@@ -547,6 +554,39 @@ class FinetunerArguments(TrainingArguments):
         }
     )
 
+@dataclass
+class DistillerArguments(TrainingArguments):
+    """
+    Adapt transformers.TrainingArguments
+    """
+    ref_model: Optional[str] = field(
+        default=None, metadata={"help": "The ref model you want distill from"}
+    )
+
+    eval_dataset_path: Optional[str] = field(
+        default=None, metadata={"help": "The path of the eval dataset to use."}
+    )
+
+    kl_t: float = field(
+        default=1.0, metadata={"help": "The temprature used when doing soft label learning"}
+    )
+
+    kl_w: float = field(
+        default=.0, metadata={"help": "The weight of soft label learning"}
+    )
+
+    mse_w: float = field(
+        default=.0, metadata={"help": "The weight of mse error"}
+    )
+
+    hard_w: float = field(
+        default=1.0, metadata={"help": "The weight of hard label learning"}
+    )
+
+    top_k: Optional[int] = field(
+        default=None, metadata={"help": "top_k value of logits"}
+    )
+
 
 @dataclass
 class EvaluatorArguments:
@@ -578,6 +618,12 @@ class EvaluatorArguments:
     repetition_penalty : float
         An argument of model.generate in huggingface to penalize repetitions.
     """
+    batch_size: int = field(
+        default=4,
+        metadata={"help": "For distributed training: local_rank"
+        }
+    )
+
     local_rank: int = field(
         default=-1,
         metadata={"help": "For distributed training: local_rank"
@@ -677,7 +723,7 @@ class EvaluatorArguments:
         default="accuracy",
         metadata={
             "help": "the metric the model will be evaluated on",
-            "choices": ["ppl", "perplexity", "acc", "accuracy", "nll", "neg_log_likelihood"],
+            "choices": ["ppl", "perplexity", "acc", "accuracy", "nll", "neg_log_likelihood", "layer_importance", "layer_attention_importance"],
         },
     )
     inference_batch_size_per_device: Optional[int] = field(
@@ -793,13 +839,32 @@ class InferencerArguments:
         },
     )
 
+
 @dataclass
 class RaftAlignerArguments(TrainingArguments):
     """
     Define a class RaftAlignerArguments to configure raft aligner.
     """
+    save_ranks: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "whether or not to store all the rank data"
+        },
+    )
+    output_rank_path: Optional[str] = field(
+        default="tmp/raft_aligner",
+        metadata={
+            "help": "path to store all the rank data"
+        },
+    )
+    raft_exp_dir: Optional[str] = field(
+        default="output_models/iter_raft_align",
+        metadata={
+            "help": "main directory to run raft experiments"
+        },
+    )
     output_reward_path: Optional[str] = field(
-        default="tmp/raft_aligner/",
+        default="tmp/raft_aligner",
         metadata={
             "help": "The path of output rewards."
         }
@@ -865,6 +930,47 @@ class RaftAlignerArguments(TrainingArguments):
             ),
         },
     )
+    mode: Optional[str] = field(
+        default="xxx",
+        metadata={
+            "help": (
+                "{collection_strategy} is either top or local"
+                " top means that we rank the samples globally regardless of the prompts"
+                " local means that we only rank the samples with the same prompt"
+            ),
+        },
+    )
+    raft_random_seed: Optional[int] = field(
+        default=1,
+        metadata={
+            "help": (
+                "{collection_strategy} is either top or local"
+                " top means that we rank the samples globally regardless of the prompts"
+                " local means that we only rank the samples with the same prompt"
+            ),
+        },
+    )
+    raft_infer_set: Optional[str] = field(
+        default="xxx",
+        metadata={
+            "help": (
+                "{collection_strategy} is either top or local"
+                " top means that we rank the samples globally regardless of the prompts"
+                " local means that we only rank the samples with the same prompt"
+            ),
+        },
+    )
+    raft_filtered_set: Optional[str] = field(
+        default="yyy",
+        metadata={
+            "help": (
+                "{collection_strategy} is either top or local"
+                " top means that we rank the samples globally regardless of the prompts"
+                " local means that we only rank the samples with the same prompt"
+            ),
+        },
+    )
+
 
 @dataclass
 class BenchmarkingArguments:
@@ -884,6 +990,248 @@ class BenchmarkingArguments:
         },
     )
 
+@dataclass
+class PrunerArguments():
+    iterative_steps: int = field(
+        default=1,
+        metadata={
+            'help':"Iteration step for pruning. Default=1"
+        }
+
+    )
+    prune_batch_size: int = field(
+        default=16,
+        metadata={
+            "help": (
+                'batch size'
+            ),
+        },
+    )
+
+    prune_block_size: int = field(
+        default=1024,
+        metadata={
+            "help": (
+                'block size'
+            ),
+        },
+    )
+
+    num_examples: int  = field(
+        default=16,
+        metadata={
+            "help": (
+                'number of examples when doing forward'
+            ),
+        },
+    )
+
+    deepspeed: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Enable deepspeed and pass the path to deepspeed json config file (e.g. ds_config.json) or an already"
+                " loaded json file as a dict"
+            )
+        },
+    )
+
+    local_rank: int = field(
+        default=-1,
+        metadata={"help": "For distributed training: local_rank"
+        },
+    )
+
+    device: str = field(
+        default="cuda",
+        metadata={
+            "help": "device of chatbot",
+            "choices": ["gpu", "cpu", "cuda"],
+        },
+    )
+
+    output_dir: str = field(
+        default="./output_dir",
+        metadata={"help": "Output path for the inferenced results"},
+    )
+
+    pruning_ratio: float = field(
+        default=0.5,
+        metadata={"help": "pruning ratio"
+        },
+    )
+
+    pruner_type: str = field(
+        default="taylor",
+        metadata={
+            "help": "pruner type"
+        },
+    )
+
+    channel_wise: bool = field(
+        default=False,
+        metadata={
+            "help": "channel wise",
+        },
+    )
+
+    block_wise: bool = field(
+        default=False,
+        metadata={
+            "help": "block wise",
+        },
+    )
+
+    layer_wise: bool = field(
+        default=False,
+        metadata={
+            "help": "layer wise",
+        },
+    )
+
+    layer: int = field(
+        default=12,
+        metadata={
+            "help": "remain the previous n layers",
+        },
+    )
+    
+    block_attention_layer_start: int = field(
+        default=4,
+        metadata={
+            "help": "start layer of block attention layers",
+        },
+    )
+
+    block_attention_layer_end: int = field(
+        default=12,
+        metadata={
+            "help": "end layer of block attention layers",
+        },
+    )
+
+    block_mlp_layer_start: int = field(
+        default=4,
+        metadata={
+            "help": "end layer of block mlp layers",
+        },
+    )
+
+    block_mlp_layer_end: int = field(
+        default=12,
+        metadata={
+            "help": "end layer of block mlp layers",
+        },
+    )
+    
+    grouping_strategy: str = field(
+        default='sum', 
+        metadata={
+            "help": 'Reduce method for grouping'
+        },
+    )
+
+    global_pruning: bool = field(
+        default=False,
+        metadata={
+            "help": 'whether global pruning'
+        },
+    )
+
+    taylor: str = field(
+        default='param_first', 
+        metadata={
+            "help": 'taylor order for importance estimation',
+            "choices": ['vectorize', 'param_second', 'param_first', 'param_mix'],
+        },
+    )
+    
+    test_before_train: bool = field(
+        default=False, 
+        metadata={
+            "help": 'whether to run eval before pruning'
+        },
+    )
+
+    test_after_train: bool = field(
+        default=False, 
+        metadata={
+            "help": 'whether to run eval after pruning'
+        },
+    )
+
+    seed: int = field(
+        default=42, 
+        metadata={
+            "help": 'seed'
+        },
+    )
+
+    save_model: bool = field(
+        default=False,
+        metadata={
+            "help": 'if save model'
+        },
+    )
+
+    temperature: float = field(
+        default=1.0,
+        metadata={
+            "help": 'generation temperature'
+        },
+    )
+
+    top_p: int = field(
+        default=0.95,
+        metadata={
+            "help": 'generation top p'
+        },
+    )
+
+    max_seq_len: int = field(
+        default=128,
+        metadata={
+            "help": 'generation max seq length'
+        },
+    )
+
+    pruning_dataset: str = field(
+        default='redpajama',
+        metadata={
+            "help": "pruning dataset"
+        }
+    )
+
+    firstabs: bool = field(
+        default=False,
+        metadata={
+            "help": "whether to abs first order grad"
+        }
+    )
+
+    layer_importance: str = field(
+        default=None, metadata={
+            "help": "Layer importance"
+        }
+    )
+
+    layer_importance_weighting_type: str = field(
+        default='first', metadata={
+            "help": "Layer importance weighting type"
+        }
+    )
+
+    grad_info_path: str = field(
+        default=None, metadata={
+            "help": "Path to grad info"
+        }
+    )
+
+    exp_t: float = field(
+        default=1., metadata={
+            "help": "temp for layer importance reweighting pruning"
+        }
+    )
 
 
 PIPELINE_ARGUMENT_MAPPING = {
@@ -891,6 +1239,8 @@ PIPELINE_ARGUMENT_MAPPING = {
     "evaluator": EvaluatorArguments,
     "inferencer": InferencerArguments,
     "raft_aligner": RaftAlignerArguments,
+    "pruner": PrunerArguments,
+    "distiller": DistillerArguments
 }
 
 

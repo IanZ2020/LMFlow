@@ -16,6 +16,7 @@ except:
 
 from flash_attn.bert_padding import unpad_input, pad_input
 
+import LLMPruner
 
 def forward(
     self,
@@ -30,6 +31,8 @@ def forward(
 
     attention_mask: [bsz, q_len]
     """
+    if self.num_heads == 0:
+        return torch.zeros_like(hidden_states), None, None
     bsz, q_len, _ = hidden_states.size()
 
     query_states = (
@@ -117,3 +120,10 @@ def replace_llama_attn_with_flash_attn():
         _prepare_decoder_attention_mask
     )
     transformers.models.llama.modeling_llama.LlamaAttention.forward = forward
+    LLMPruner.models.hf_llama.modeling_llama.LlamaModel._prepare_decoder_attention_mask = (
+        _prepare_decoder_attention_mask
+    )
+    LLMPruner.models.hf_llama.modeling_llama.PrunedLlamaModel._prepare_decoder_attention_mask = (
+        _prepare_decoder_attention_mask
+    )
+    LLMPruner.models.hf_llama.modeling_llama.LlamaAttention.forward = forward

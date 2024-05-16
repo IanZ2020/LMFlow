@@ -51,6 +51,14 @@ from transformers import (
     AutoModelForCausalLM,
 )
 
+from LLMPruner.models.hf_llama import (
+    PrunedLlamaForCausalLM, 
+    PrunedLlamaConfig,
+    LlamaForCausalLM,
+    LlamaConfig
+)
+
+
 from lmflow.datasets.dataset import Dataset
 from lmflow.models.decoder_model import DecoderModel
 from lmflow.models.interfaces.tunable import Tunable
@@ -63,6 +71,7 @@ from lmflow.utils.constants import (
 logger = logging.getLogger(__name__)
 
 MODELS_SUPPORT_FLASH_ATTENTION = [
+    "PrunedLlamaForCausalLM",
     "LlamaForCausalLM",
     "GPTNeoForCausalLM",
     "GPT2ForCausalLM",
@@ -70,7 +79,7 @@ MODELS_SUPPORT_FLASH_ATTENTION = [
 ]
 
 GPU_SUPPORT_FLASH_ATTENTION = {
-    "A100": ["LlamaForCausalLM", "GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"],
+    "A100": ["PrunedLlamaForCausalLM","LlamaForCausalLM", "GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"],
     "A40": ["GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"]
 }
 
@@ -78,8 +87,8 @@ try:
     import flash_attn
     if int(flash_attn.__version__.split(".")[0]) == 2:
         GPU_SUPPORT_FLASH_ATTENTION = {
-            "A100": ["LlamaForCausalLM", "GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"],
-            "A40": ["LlamaForCausalLM","GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"]
+            "A100": ["PrunedLlamaForCausalLM","LlamaForCausalLM", "GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"],
+            "A40": ["PrunedLlamaForCausalLM","LlamaForCausalLM","GPTNeoForCausalLM", "GPT2ForCausalLM", "BloomForCausalLM"]
         }
 except:
     pass
@@ -142,7 +151,6 @@ class HFDecoderModel(DecoderModel, Tunable):
             "use_auth_token": True if model_args.use_auth_token else None,
             "trust_remote_code": model_args.trust_remote_code,
         }
-        
         try:
             if model_args.tokenizer_name:
                 tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
@@ -175,8 +183,9 @@ class HFDecoderModel(DecoderModel, Tunable):
                     " script, save it, and load it from here, using"
                     " --tokenizer_name."
                 )
-            
-        self.tokenizer = tokenizer  
+        
+        tokenizer.name_or_path=''
+        self.tokenizer = tokenizer
 
         torch_dtype = (
             model_args.torch_dtype
@@ -193,7 +202,12 @@ class HFDecoderModel(DecoderModel, Tunable):
         if model_args.config_name:
             config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
         elif model_args.model_name_or_path:
-            config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+            if model_args.arch_type =='pruned_decoder_only':
+                config = PrunedLlamaConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+            elif model_args.arch_type =='my_llama':
+                config = LlamaConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+            else:
+                config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
         else:
             config = CONFIG_MAPPING[model_args.model_type]()
             logger.warning("You are instantiating a new config instance from scratch.")
@@ -204,7 +218,7 @@ class HFDecoderModel(DecoderModel, Tunable):
 
         #position interpolation
         if model_args.do_rope_scaling:
-            if "LlamaForCausalLM" in config.architectures:
+            if "LlamaForCausalLM" in config.architectures or "PrunedLlamaForCausalLM" in config.architectures:
                 from lmflow.utils.position_interpolation.llama_rope_scaled_monkey_patch import (
                         replace_llama_with_condense,
                 )
@@ -233,7 +247,7 @@ class HFDecoderModel(DecoderModel, Tunable):
                 supported_models = GPU_SUPPORT_FLASH_ATTENTION[supported_gpu_device]
                 
                 config.use_cache = False
-                if "LlamaForCausalLM" in config.architectures and "LlamaForCausalLM" in supported_models:
+                if ("LlamaForCausalLM" in config.architectures and "LlamaForCausalLM" in supported_models) or ("PrunedLlamaForCausalLM" in config.architectures and "PrunedLlamaForCausalLM" in supported_models):
                     from lmflow.utils.flash_attention.llama_flash_attention import (
                         replace_llama_attn_with_flash_attn,
                     )
@@ -261,6 +275,7 @@ class HFDecoderModel(DecoderModel, Tunable):
                     
         if tune_strategy == 'normal':
             if model_args.model_name_or_path:
+
                 compute_dtype = torch_dtype
                 device_map = "auto"
                 if os.environ.get('LOCAL_RANK') is not None:
@@ -279,36 +294,66 @@ class HFDecoderModel(DecoderModel, Tunable):
                         bnb_4bit_quant_type=model_args.quant_type,
                     )
                 try:
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_args.model_name_or_path,
-                        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-                        config=config,
-                        quantization_config=quant_config if model_args.use_qlora else None,
-                        cache_dir=model_args.cache_dir,
-                        revision=model_args.model_revision,
-                        use_auth_token=True if model_args.use_auth_token else None,
-                        torch_dtype=torch_dtype,
-                        device_map=device_map,
-                        trust_remote_code = model_args.trust_remote_code,
-                    )
+                    if model_args.arch_type == 'pruned_decoder_only':
+                        model = PrunedLlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                            config=config,
+                            quantization_config=quant_config if model_args.use_qlora else None,
+                            cache_dir=model_args.cache_dir,
+                            revision=model_args.model_revision,
+                            use_auth_token=True if model_args.use_auth_token else None,
+                            torch_dtype=torch_dtype,
+                            device_map=device_map,
+                            trust_remote_code = model_args.trust_remote_code,
+                        )
+                    else:
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                            config=config,
+                            quantization_config=quant_config if model_args.use_qlora else None,
+                            cache_dir=model_args.cache_dir,
+                            revision=model_args.model_revision,
+                            use_auth_token=True if model_args.use_auth_token else None,
+                            torch_dtype=torch_dtype,
+                            device_map=device_map,
+                            trust_remote_code = model_args.trust_remote_code,
+                        )
                 #for deepspeed zero3, we don't need to specify device_map
                 except:
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_args.model_name_or_path,
-                        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-                        config=config,
-                        quantization_config=quant_config if model_args.use_qlora else None,
-                        cache_dir=model_args.cache_dir,
-                        revision=model_args.model_revision,
-                        use_auth_token=True if model_args.use_auth_token else None,
-                        torch_dtype=torch_dtype,
-                        trust_remote_code = model_args.trust_remote_code,
-                    )
+                    if model_args.arch_type == 'pruned_decoder_only':
+                        model = PrunedLlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                            config=config,
+                            quantization_config=quant_config if model_args.use_qlora else None,
+                            cache_dir=model_args.cache_dir,
+                            revision=model_args.model_revision,
+                            use_auth_token=True if model_args.use_auth_token else None,
+                            torch_dtype=torch_dtype,
+                            trust_remote_code = model_args.trust_remote_code,
+                        )
+                    else:
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                            config=config,
+                            quantization_config=quant_config if model_args.use_qlora else None,
+                            cache_dir=model_args.cache_dir,
+                            revision=model_args.model_revision,
+                            use_auth_token=True if model_args.use_auth_token else None,
+                            torch_dtype=torch_dtype,
+                            trust_remote_code = model_args.trust_remote_code,
+                        )
                 if model_args.use_qlora:
                     model.gradient_checkpointing_enable()
                     model = prepare_model_for_kbit_training(model)
             else:
-                model = AutoModelForCausalLM.from_config(config)
+                if model_args.arch_type == 'pruned_decoder_only':
+                    model = PrunedLlamaForCausalLM.from_config(config)
+                else:
+                    model = AutoModelForCausalLM.from_config(config)
                 n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
                 logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
             self.backend_model_full = model
@@ -325,6 +370,7 @@ class HFDecoderModel(DecoderModel, Tunable):
                     lora_dropout=model_args.lora_dropout,
                     target_modules=lora_target_modules,
                 )
+                model.enable_input_require_grads()
                 model = get_peft_model(model, peft_config)
                 model.print_trainable_parameters()
 
@@ -344,15 +390,36 @@ class HFDecoderModel(DecoderModel, Tunable):
         elif tune_strategy == 'none':
             if use_accelerator:
                 peft_model_id = model_args.lora_model_path
-                self.backend_model = AutoModelForCausalLM.from_pretrained(
-                        model_args.model_name_or_path,
-                        config=config,
-                        device_map="auto",
-                        offload_folder="offload",
-                        offload_state_dict=True,
-                        torch_dtype=torch_dtype,
-                        load_in_8bit = model_args.use_int8
-                    )
+                if model_args.arch_type == 'pruned_decoder_only':
+                    self.backend_model = PrunedLlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            device_map="auto",
+                            offload_folder="offload",
+                            offload_state_dict=True,
+                            torch_dtype=torch_dtype,
+                            load_in_8bit = model_args.use_int8
+                        )
+                elif model_args.arch_type == 'my_llama':
+                    self.backend_model = LlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            device_map="auto",
+                            offload_folder="offload",
+                            offload_state_dict=True,
+                            torch_dtype=torch_dtype,
+                            load_in_8bit = model_args.use_int8
+                        )
+                else:
+                    self.backend_model = AutoModelForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            device_map="auto",
+                            offload_folder="offload",
+                            offload_state_dict=True,
+                            torch_dtype=torch_dtype,
+                            load_in_8bit = model_args.use_int8
+                        )
                 if peft_model_id is not None:
                     self.backend_model = PeftModel.from_pretrained(
                         self.backend_model, 
@@ -373,7 +440,8 @@ class HFDecoderModel(DecoderModel, Tunable):
                 if model_args.use_ram_optimized_load and peft_model_id is None:
                     try:
                         # RAM-optimized load
-                        self.backend_model = AutoModelForCausalLM.from_pretrained(
+                        if model_args.arch_type == 'pruned_decoder_only':
+                            self.backend_model = PrunedLlamaForCausalLM.from_pretrained(
                             model_args.model_name_or_path,
                             config=config,
                             device_map="auto",
@@ -381,28 +449,72 @@ class HFDecoderModel(DecoderModel, Tunable):
                             offload_state_dict=True,
                             torch_dtype=torch_dtype,
                         )
+                        elif model_args.arch_type == 'my_llama':
+                            self.backend_model = LlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            device_map="auto",
+                            offload_folder="offload",
+                            offload_state_dict=True,
+                            torch_dtype=torch_dtype,
+                        )
+                        else:
+                            self.backend_model = AutoModelForCausalLM.from_pretrained(
+                                model_args.model_name_or_path,
+                                config=config,
+                                device_map="auto",
+                                offload_folder="offload",
+                                offload_state_dict=True,
+                                torch_dtype=torch_dtype,
+                            )
                     except:
                         logger.warning(
                             "Failed to use RAM optimized load. Automatically"
                             " use original load instead."
                         )
                         # Normal load
-                        self.backend_model = AutoModelForCausalLM.from_pretrained(
-                            model_args.model_name_or_path,
-                            config=config,
-                            torch_dtype=torch_dtype,
-                        )
+                        if model_args.arch_type == 'pruned_decoder_only':
+                            self.backend_model = PrunedLlamaForCausalLM.from_pretrained(
+                                model_args.model_name_or_path,
+                                config=config,
+                                torch_dtype=torch_dtype,
+                            )
+                        elif model_args.arch_type == 'my_llama':
+                            self.backend_model = LlamaForCausalLM.from_pretrained(
+                                model_args.model_name_or_path,
+                                config=config,
+                                torch_dtype=torch_dtype,
+                            )
+                        else:
+                            self.backend_model = AutoModelForCausalLM.from_pretrained(
+                                model_args.model_name_or_path,
+                                config=config,
+                                torch_dtype=torch_dtype,
+                            )
                 else:
                     if peft_model_id is not None:
                         logger.warning(
                             "LoRA does not support RAM optimized load currently."
                             " Automatically use original load instead."
                         )
-                    self.backend_model = AutoModelForCausalLM.from_pretrained(
-                        model_args.model_name_or_path,
-                        config=config,
-                        torch_dtype=torch_dtype,
-                    )
+                    if model_args.arch_type == 'pruned_decoder_only':
+                        self.backend_model = PrunedLlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            torch_dtype=torch_dtype,
+                        )
+                    elif model_args.arch_type == 'my_llama':
+                        self.backend_model = LlamaForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            torch_dtype=torch_dtype,
+                        )
+                    else:
+                        self.backend_model = AutoModelForCausalLM.from_pretrained(
+                            model_args.model_name_or_path,
+                            config=config,
+                            torch_dtype=torch_dtype,
+                        )
 
                 self.backend_model_full = self.backend_model
                 if peft_model_id is not None:
@@ -706,23 +818,39 @@ class HFDecoderModel(DecoderModel, Tunable):
                 "revision": self.model_args.model_revision,
                 "use_auth_token": True if self.model_args.use_auth_token else None,
             }
-            config = AutoConfig.from_pretrained(self.model_args.model_name_or_path, **config_kwargs)
+            if self.model_args.arch_type == 'pruned_decoder_only':
+                config = PrunedLlamaConfig.from_pretrained(self.model_args.model_name_or_path, **config_kwargs)
+            else:
+                config = AutoConfig.from_pretrained(self.model_args.model_name_or_path, **config_kwargs)
             device_map = "auto"
             if os.environ.get('LOCAL_RANK') is not None:
                 local_rank = int(os.environ.get('LOCAL_RANK','0'))
                 device_map = {'': local_rank}
 
-            self.backend_model_full = AutoModelForCausalLM.from_pretrained(
-                self.model_args.model_name_or_path,
-                from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
-                config=config,
-                cache_dir=self.model_args.cache_dir,
-                revision=self.model_args.model_revision,
-                use_auth_token=True if self.model_args.use_auth_token else None,
-                torch_dtype=torch_dtype,
-                device_map=device_map,
-                trust_remote_code = self.model_args.trust_remote_code,
-            )
+            if self.model_args.arch_type == 'pruned_decoder_only':
+                self.backend_model_full = PrunedLlamaForCausalLM.from_pretrained(
+                    self.model_args.model_name_or_path,
+                    from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
+                    config=config,
+                    cache_dir=self.model_args.cache_dir,
+                    revision=self.model_args.model_revision,
+                    use_auth_token=True if self.model_args.use_auth_token else None,
+                    torch_dtype=torch_dtype,
+                    device_map=device_map,
+                    trust_remote_code = self.model_args.trust_remote_code,
+                )
+            else:
+                self.backend_model_full = AutoModelForCausalLM.from_pretrained(
+                    self.model_args.model_name_or_path,
+                    from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
+                    config=config,
+                    cache_dir=self.model_args.cache_dir,
+                    revision=self.model_args.model_revision,
+                    use_auth_token=True if self.model_args.use_auth_token else None,
+                    torch_dtype=torch_dtype,
+                    device_map=device_map,
+                    trust_remote_code = self.model_args.trust_remote_code,
+                )
         
             self.backend_model = PeftModel.from_pretrained(self.backend_model_full, tmpdirname)
 

@@ -14,7 +14,7 @@ import json
 from accelerate import Accelerator
 from transformers import AutoConfig
 import torch.distributed as dist
-
+import torch.nn as nn
 from lmflow.datasets.dataset import Dataset
 from lmflow.pipeline.base_pipeline import BasePipeline
 from lmflow.models.hf_decoder_model import HFDecoderModel
@@ -71,6 +71,7 @@ class Evaluator(BasePipeline):
         train_batch_size = self.evaluator_args.inference_batch_size_per_device * self.world_size
         self.evaluator_args.minibatch_size = train_batch_size
         self.block_size = evaluator_args.evaluate_block_size
+        self.batch_size = evaluator_args.batch_size
         # dataloader, data_size = create_dataloader(args)    # load dataset
 
 
@@ -149,6 +150,11 @@ class Evaluator(BasePipeline):
             nll = self._evaluate_nll(model, dataset, verbose=verbose)
             print(f"Evaluating final negative log likelihood: {nll}")
             return nll
+        elif metric in ["layer_importance"]:
+            self._evaluate_layer_importance(model, dataset, verbose=verbose)
+        elif metric in ["layer_attention_importance"]:
+            result = self._evaluate_layer_attn_importance(model, dataset, verbose=verbose)
+            return result
         else:
             raise NotImplementedError(f"metric {metric} is not supported")
 
@@ -321,21 +327,231 @@ class Evaluator(BasePipeline):
         if data_dict['type'] == 'text2text':
             raise NotImplementedError("ppl evaluation is currently not supported for text2text dataset, please use text_only dataset.")
         texts = [ instance["text"] for instance in data_dict["instances"] ]
+        print('Running tokenization')
+        encodings = model.get_tokenizer()("\n\n".join(texts), return_tensors="pt")
+        print('Finished tokenization')
+        # # Define some constant
+        # if self.model_args.truncate_to_model_max_length:
+        #     try:
+        #         max_length = min(model.get_backend_model().config.n_positions, model.get_max_length())
+        #     except:
+        #         max_length = min(1024, model.get_max_length())
+        # else:
+        #     max_length = self.block_size
+        
+        # if verbose:
+        #     print(f"The maximum sequence length : {max_length}")
+        encode_batch_num = encodings.input_ids.size(0)
+        seq_len = encodings.input_ids.size(1)
+
+        nlls = []
+        len_per_device = seq_len // self.world_size
+        current_batch = encodings.input_ids[:, self.local_rank*len_per_device:(self.local_rank+1)*len_per_device]
+
+        num_of_example = len_per_device // self.block_size
+        num_of_batch = num_of_example // self.batch_size * encode_batch_num
+        current_batch = current_batch[:,0: num_of_batch*self.batch_size*self.block_size].view(num_of_batch, self.batch_size, self.block_size)
+
+        count = 0
+        for id in range(0, num_of_batch):
+            input_ids = current_batch[id].to(device=self.local_rank)
+            target_ids = input_ids.clone()
+            trg_len = self.block_size
+            with torch.no_grad():
+                outputs = model.get_backend_model()(input_ids, labels=target_ids)
+                # loss is calculated using CrossEntropyLoss which averages over valid labels
+                # N.B. the model only calculates loss over trg_len - 1 labels, because it internally shifts the labels
+                # to the left by 1.
+                neg_log_likelihood = outputs.loss
+
+            nlls.append(neg_log_likelihood)
+            count += 1
+
+            if verbose:
+                print(f"rank{self.local_rank}, Evaluating PPL: {count} / {num_of_batch} Complete, current ppl : {torch.exp(torch.stack(nlls).mean())}")
+            
+        all_process = torch.stack(nlls).mean()
+        dist.all_reduce(all_process, dist.ReduceOp.SUM, async_op=False)
+        result = all_process / self.world_size
+        ppl = torch.exp(result)
+        
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            with open('output_models/eval_results.txt', 'a') as f:
+                f.write(f'model_name_or_path: {self.model_args.model_name_or_path}, dataset_path: {self.data_args.dataset_path}, block_size: {self.evaluator_args.evaluate_block_size}, metric:{self.evaluator_args.metric}')
+                f.write(f"Eval result: {ppl}")
+                f.write("\n******************************\n")
+        return ppl
+
+    def _evaluate_layer_importance(self, model, dataset: Dataset, verbose=True):
+        data_dict = dataset.to_dict()
+        if data_dict['type'] == 'text2text':
+            raise NotImplementedError("ppl evaluation is currently not supported for text2text dataset, please use text_only dataset.")
+        texts = [ instance["text"] for instance in data_dict["instances"] ]
+        encodings = []
+        print('Running tokenization')
+        for text in texts:
+            encodings.append(model.get_tokenizer()(text, return_tensors="pt")['input_ids'])
+        encodings = torch.cat(encodings,dim=1)
+
+        print('Finished tokenization')
+        # Define some constant
+        try:
+            max_length = min(model.get_backend_model().config.n_positions, model.get_max_length())
+        except:
+            max_length = min(1024, model.get_max_length())
+
+        if verbose:
+            print(f"The maximum sequence length : {max_length}")
+        encode_batch_num = encodings.shape[0]
+        
+        seq_len = encodings.shape[1]
+        print(f"The total token count : {seq_len}")
+
+        def cat_sim(hidden_states):
+            cos = nn.CosineSimilarity(dim=-1, eps=1e-8)
+            sim = []
+            with torch.no_grad():
+                for i in range(len(model.get_backend_model().base_model.layers)):
+                    input = hidden_states[i].flatten(-2,-1)
+                    output = hidden_states[i+1].flatten(-2,-1)
+                    sim.append(cos(input,output))
+            return torch.stack(sim).mean(dim=-1)
+
+        def mean_sim(hidden_states):
+            cos = nn.CosineSimilarity(dim=-1, eps=1e-8)
+            sim_for_attn = []
+            sim_for_ffn = []
+            sim_for_layer = []
+            with torch.no_grad():
+                for i in range(len(model.get_backend_model().base_model.layers)):
+                    input = hidden_states[2*i].to(torch.float32)
+                    after_attn = hidden_states[2*i+1].to(torch.float32)
+                    output = hidden_states[2*i+2].to(torch.float32)
+                    sim_for_attn.append(cos(input,after_attn))
+                    sim_for_ffn.append(cos(after_attn,output))
+                    sim_for_layer.append(cos(input,output))
+            return torch.stack(sim_for_attn).mean(dim=-1).mean(dim=-1), torch.stack(sim_for_ffn).mean(dim=-1).mean(dim=-1), torch.stack(sim_for_layer).mean(dim=-1).mean(dim=-1) 
+
+        def l2_error(hidden_states):
+            sim = []
+            norm_sim = []
+            norm_sim_sep = []
+            with torch.no_grad():
+               for i in range(len(model.get_backend_model().base_model.layers)):
+                    input = hidden_states[i]
+                    output = hidden_states[i+1]
+                    l2_error = torch.norm((input-output),dim=-1)
+                    input_norm = torch.norm(input,dim=-1)
+                    # mse/(torch.norm(input)/input.numel())
+
+                    sim.append(l2_error.mean())
+                    norm_sim.append((l2_error / input_norm).mean())
+                    norm_sim_sep.append((torch.norm((output-input)/(input.abs()+1e-10),dim=-1)/input.shape[-1]).mean())
+            return torch.stack(sim), torch.stack(norm_sim), torch.stack(norm_sim_sep)
+        
+        def norm_ratio(hidden_states):
+            ratio = []
+            with torch.no_grad():
+               for i in range(len(model.get_backend_model().base_model.layers)):
+                    input = hidden_states[i]
+                    output = hidden_states[i+1]
+                    input_norm = torch.norm(input, dim = -1)
+                    output_norm = torch.norm(output, dim = -1)
+                    
+                    ratio.append((output_norm/input_norm).mean(dim=-1))
+            return torch.stack(ratio).mean(dim=-1)
+        
+        mean_sim_results_for_attn = []
+        mean_sim_results_for_ffn = []
+        mean_sim_results_for_layer = []
+
+        len_per_device = seq_len // self.world_size
+        current_batch = encodings[:, self.local_rank*len_per_device:(self.local_rank+1)*len_per_device]
+
+        num_of_example = len_per_device // self.block_size
+        num_of_batch = num_of_example // self.batch_size * encode_batch_num
+        current_batch = current_batch[:,0: num_of_batch*self.batch_size*self.block_size].view(num_of_batch, self.batch_size, self.block_size)
+
+        count = 0
+        for id in range(0, num_of_batch):
+            
+            input_ids = current_batch[id].to(device=self.local_rank)
+
+            with torch.no_grad():
+                outputs = model.get_backend_model().base_model.forward(input_ids,output_hidden_states=True, output_hidden_states_after_attn=True)
+                # loss is calculated using CrossEntropyLoss which averages over valid labels
+                # N.B. the model only calculates loss over trg_len - 1 labels, because it internally shifts the labels
+                # to the left by 1.
+                hidden_states = outputs.hidden_states
+
+            # cat_sim_results.append(cat_sim(hidden_states))
+            r = mean_sim(hidden_states)
+            mean_sim_results_for_attn.append(r[0])
+            mean_sim_results_for_ffn.append(r[1])
+            mean_sim_results_for_layer.append(r[2])
+            # l2_error_results.append(l2_error(hidden_states)[0])
+            # l2_error_norm_results.append(l2_error(hidden_states)[1])
+            # l2_error_norm_sep_results.append(l2_error(hidden_states)[2])
+            # output_norm_ratio_results.append(norm_ratio(hidden_states))
+            count += 1
+            print(f"rank{self.local_rank}: {count}/{num_of_batch}") 
+        
+        # cat_sim_results = torch.stack(cat_sim_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        mean_sim_results_for_attn = torch.stack(mean_sim_results_for_attn).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        mean_sim_results_for_ffn = torch.stack(mean_sim_results_for_ffn).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        mean_sim_results_for_layer = torch.stack(mean_sim_results_for_layer).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # l2_error_results = torch.stack(l2_error_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # l2_error_norm_results = torch.stack(l2_error_norm_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # l2_error_norm_sep_results = torch.stack(l2_error_norm_sep_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # output_norm_ratio_results = torch.stack(output_norm_ratio_results).transpose(dim0=0,dim1=1).to(device=self.local_rank)
+        # print(f"rank{self.local_rank}:\nCat_Sim for All Layers{cat_sim_results.mean(dim=-1)}\nMean_Sim for All Layers{mean_sim_results.mean(dim=-1)}")
+
+        all_process = torch.stack([mean_sim_results_for_attn.mean(dim=-1), mean_sim_results_for_ffn.mean(dim=-1), mean_sim_results_for_layer.mean(dim=-1)])
+
+        dist.all_reduce(all_process, dist.ReduceOp.SUM, async_op=False)
+        result = all_process
+        
+        mean_sim_results_for_attn = result[0] / self.world_size
+        mean_sim_results_for_ffn = result[1] / self.world_size
+        mean_sim_results_for_layer = result[2] / self.world_size
+        
+
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            with open('/home/zhangyihan/LMFlow/output_models/eval_results.txt', 'a') as f:
+                f.write(f'model_name_or_path: {self.model_args.model_name_or_path}, dataset_path: {self.data_args.dataset_path}, block_size: {self.evaluator_args.evaluate_block_size}, metric:{self.evaluator_args.metric}')
+                f.write(f"\nMean_Sim for All Layers attn{mean_sim_results_for_attn}, Rank between layers: {mean_sim_results_for_attn.argsort(dim=-1)}\nMean_Sim for All Layers ffn{mean_sim_results_for_ffn}, Rank between layers: {mean_sim_results_for_ffn.argsort(dim=-1)}\nMean_Sim for All Layers{mean_sim_results_for_layer}, Rank between layers: {mean_sim_results_for_layer.argsort(dim=-1)}\n")
+                
+                f.write("\n******************************\n")
+        return mean_sim_results_for_attn, mean_sim_results_for_ffn, mean_sim_results_for_layer
+
+    def _evaluate_layer_attn_importance(self, model, dataset: Dataset, verbose=True):
+        data_dict = dataset.to_dict()
+        if data_dict['type'] == 'text2text':
+            raise NotImplementedError("ppl evaluation is currently not supported for text2text dataset, please use text_only dataset.")
+        texts = [ instance["text"] for instance in data_dict["instances"] ]
         encodings = model.get_tokenizer()("\n\n".join(texts), return_tensors="pt")
         # Define some constant
-        if self.model_args.truncate_to_model_max_length:
-            try:
-                max_length = min(model.get_backend_model().config.n_positions, model.get_max_length())
-            except:
-                max_length = min(1024, model.get_max_length())
-        else:
-            max_length = self.block_size
-        
+        try:
+            max_length = min(model.get_backend_model().config.n_positions, model.get_max_length())
+        except:
+            max_length = min(1024, model.get_max_length())
+
         if verbose:
             print(f"The maximum sequence length : {max_length}")
         seq_len = encodings.input_ids.size(1)
 
-        nlls = []
+        def attn_eval(attn_out):
+            self_attn = []
+            for i in range(len(model.get_backend_model().base_model.layers)):
+                attn_matrix = attn_out[i]
+                seq_length = attn_matrix.shape[2]
+                num_of_heads = attn_matrix.shape[1]
+                
+                self_attn.append(torch.stack([attn_matrix[0][i].trace()/seq_length for i in range(num_of_heads)]))
+            return  torch.stack(self_attn)
+
+
+        attn_results = []
         prev_end_loc = 0
         for begin_loc in range(0, seq_len, self.block_size):
             end_loc = min(begin_loc + max_length, seq_len)
@@ -345,21 +561,20 @@ class Evaluator(BasePipeline):
             target_ids[:, :-trg_len] = -100
 
             with torch.no_grad():
-                outputs = model.get_backend_model()(input_ids, labels=target_ids)
+                outputs = model.get_backend_model().base_model.forward(input_ids,output_attentions=True)
                 # loss is calculated using CrossEntropyLoss which averages over valid labels
                 # N.B. the model only calculates loss over trg_len - 1 labels, because it internally shifts the labels
                 # to the left by 1.
-                neg_log_likelihood = outputs.loss
+                attn_out = outputs.attentions
 
-            nlls.append(neg_log_likelihood)
+            attn_results.append(attn_eval(attn_out))
             prev_end_loc = end_loc
-            if verbose:
-                print(f"Evaluating PPL: {int(begin_loc/self.block_size) + 1} / {int(seq_len/self.block_size)} Complete, current ppl : {torch.exp(torch.stack(nlls).mean())}")
             if end_loc == seq_len:
                 break
-        ppl = torch.exp(torch.stack(nlls).mean())
-        return ppl
-
+        attn_result = torch.stack(attn_results).mean(dim=0)
+        print(attn_result)
+        return attn_result
+        
 
     def _evaluate_nll(
         self,
